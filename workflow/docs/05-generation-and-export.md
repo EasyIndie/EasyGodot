@@ -249,6 +249,36 @@ DPR 与窗口尺寸，并**真正分配**三种尺寸的帧缓冲看能否成功
 
 ---
 
+## 2c. 字体子集化（workflow/scripts/gf-font-subset.sh）
+
+中文字体是 Web 游戏体积的大头：Noto Sans SC 完整字体 **16.4MB**。
+本游戏 UI 实际上只用几百个字，于是按项目实际用字裁剪：
+
+```bash
+workflow/scripts/gf-font-subset.sh                     # 重建字体子集
+workflow/scripts/gf-run.sh -p games/puzzle-core res://tests/test_font.gd   # 校验
+```
+
+| | 前 | 后 |
+|---|---|---|
+| 字体文件 | 16.4 MB | **272 KB**（60×） |
+| `index.pck` | 14.5 MB | **320 KB** |
+| 首屏下载（pck+wasm+js） | ~54 MB | **~39.8 MB**（-26%） |
+| 运行时字体内存 | ~16 MB | **~0.3 MB** |
+
+**做法**：从会渲染 UI 文本的源码（`scenes/`、`meta/`、`project.godot`、`levels/`）抽取所有字符，
+用 HarfBuzz（`subset-font`，Node 包）裁剪。完整字体自动下载（`notofonts/noto-cjk` 的 SubsetOTF），
+`subset-font` 缺失时自动 `npm install` 到 `.tools/fontsubset/`。
+
+**守卫**：`tests/test_font.gd` 扫描同样的来源，断言每个字符都有字形，
+并断言字体 < 1MB（防止有人不小心把完整字体换回去）。
+新增文案用到子集外的字会**直接测试失败**，而不是静默变成豆腐块。
+
+> 两边扫描范围必须一致（`UI_SOURCES`）。core/solver/tools/tests 是 headless 层，
+> 不渲染文字，其注释里的 `∘` 之类符号也未必在 Noto Sans SC 里，所以不计入。
+
+---
+
 ## 3. 阶段 4 沉淀的最佳实践
 
 1. **内容生产闭环 = 生成 + 质检门 + 筛选**：AI 生成关卡不再「人工抽查」，而是自动

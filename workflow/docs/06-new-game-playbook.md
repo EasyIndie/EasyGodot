@@ -82,6 +82,7 @@ workflow/scripts/gf-export.sh games/my-game
 | `workflow/scripts/gf-export.sh [game] [平台...]` | 一键导出（Web + Linux + Windows） |
 | `workflow/scripts/gf-package.sh [game] [--appid N]` | 打 Steam Demo 分发包（zip + SteamPipe 配置） |
 | `workflow/scripts/gf-pages.sh [game] [--deploy]` | 生成 / 发布 GitHub Pages 静态站点 |
+| `workflow/scripts/gf-font-subset.sh [game]` | 按项目实际用字重建字体子集（体积/内存优化） |
 
 **pi 斜杠命令**（装 `workflow/pi-extensions/game-factory.ts` 后，免开终端）：
 

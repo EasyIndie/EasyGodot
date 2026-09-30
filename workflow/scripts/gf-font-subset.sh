@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# ============================================================================
+# gf-font-subset.sh — 按项目**实际用字**裁剪内置字体（体积 + 运行时内存优化）。
+#
+# 为什么需要：
+#   Noto Sans SC 完整字体 16MB+。Web 端用户要下载它；移动端还要常驻内存，
+#   而 iOS Safari 对单个标签页的内存非常敏感（WebGL 上下文被回收的常见诱因）。
+#   本项目 UI 文案只用到几百个字符 → 子集化后约 300KB（缩小约 50 倍）。
+#
+# 做法：从会渲染 UI 文本的源码里抽取所有字符，用 HarfBuzz（subset-font）裁剪。
+# 守卫：tests/test_font.gd 会扫描同样的源码，确保每个字符都有字形
+#       （避免新增文案静默变成「豆腐块」）。
+#
+# 用法:
+#   workflow/scripts/gf-font-subset.sh [项目目录，默认 games/puzzle-core]
+#   FULL_FONT=/path/to/NotoSansSC-Regular.otf workflow/scripts/gf-font-subset.sh
+#
+# 完整字体查找顺序:
+#   1) $FULL_FONT 环境变量
+#   2) .tools/fonts/NotoSansSC-Regular.otf
+#   3) 自动下载 Noto CJK 官方 SubsetOTF（约 8MB）
+#
+# 依赖: python3（抽字符）、node + npm（subset-font，缺则自动安装到 .tools/fontsubset）
+# ============================================================================
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
+PROJECT="${1:-games/puzzle-core}"
+FONT="$ROOT/$PROJECT/fonts/NotoSansSC-Regular.otf"
+WORK="$ROOT/.tools/fontsubset"
+FULL="${FULL_FONT:-$ROOT/.tools/fonts/NotoSansSC-Regular.otf}"
+UPSTREAM="https://raw.githubusercontent.com/notofonts/noto-cjk/main/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf"
+
+cd "$ROOT"
+
+# ── node 解析（WSL 里 node 可能只在 Windows 侧）─────────────────────────────
+NODE_BIN=""
+for c in node node.exe "/mnt/c/Program Files/nodejs/node.exe"; do
+	if command -v "$c" >/dev/null 2>&1; then NODE_BIN="$(command -v "$c")"; break; fi
+	if [ -x "$c" ]; then NODE_BIN="$c"; break; fi
+done
+if [ -z "$NODE_BIN" ]; then
+	echo "✗ 找不到 node。请安装 Node.js 后重试。" >&2
+	exit 2
+fi
+# Windows 版 node 需要 Windows 风格路径
+native() {
+	if [[ "$NODE_BIN" == *.exe ]]; then wslpath -w "$1"; else printf '%s' "$1"; fi
+}
+NPM_BIN=""
+for c in npm npm.cmd "/mnt/c/Program Files/nodejs/npm.cmd"; do
+	if command -v "$c" >/dev/null 2>&1; then NPM_BIN="$(command -v "$c")"; break; fi
+	if [ -x "$c" ]; then NPM_BIN="$c"; break; fi
+done
+
+echo "=== 1/4 准备完整字体 ==="
+if [ ! -f "$FULL" ]; then
+	echo "    本地无完整字体，下载官方 SubsetOTF ..."
+	mkdir -p "$(dirname "$FULL")"
+	curl -fsSL -o "$FULL" "$UPSTREAM"
+fi
+echo "    来源: $FULL ($(du -h "$FULL" | cut -f1))"
+
+echo "=== 2/4 准备 subset-font ==="
+mkdir -p "$WORK"
+if [ ! -d "$WORK/node_modules/subset-font" ]; then
+	if [ -z "$NPM_BIN" ]; then
+		echo "✗ 未安装 subset-font 且找不到 npm。请先执行: cd $WORK && npm install subset-font" >&2
+		exit 2
+	fi
+	echo '{"name":"gf-fontsubset","private":true}' > "$WORK/package.json"
+	( cd "$WORK" && "$NPM_BIN" install subset-font --no-audit --no-fund >/dev/null 2>&1 )
+fi
+echo "    已就绪: $WORK/node_modules/subset-font"
+
+echo "=== 3/4 抽取项目实际用字 ==="
+GLYPHS="$WORK/glyphs.txt"
+python3 - "$ROOT" "$PROJECT" "$GLYPHS" <<'PY'
+import io, glob, os, sys
+root, project, out = sys.argv[1], sys.argv[2], sys.argv[3]
+# ── UI 文案来源（必须与 tests/test_font.gd 的扫描范围一致！）────────────
+# 只收集「会真正渲染成文字」的文件：core/solver/tools/tests 是 headless 层，不渲染文字，
+# 它们注释里的符号（如 ∘）也未必在 Noto Sans SC 里，不应计入。
+UI_SOURCES = ["scenes/*.gd", "meta/*.gd", "*.tscn", "*.godot", "levels/*.json"]
+
+chars = set(chr(c) for c in range(0x20, 0x7F))     # ASCII 可见字符打底
+base = os.path.join(root, project)
+files = []
+for pat in UI_SOURCES:
+    files += sorted(glob.glob(os.path.join(base, pat)))
+for f in files:
+    chars.update(io.open(f, encoding="utf-8", errors="ignore").read())
+io.open(out, "w", encoding="utf-8").write("".join(sorted(chars)))
+cjk = sum(1 for c in chars if ord(c) > 0x2000)
+print("    扫描 %d 个文件 -> %d 个字符（其中 CJK/符号 %d）" % (len(files), len(chars), cjk))
+PY
+
+echo "=== 4/4 子集化 ==="
+DRIVER="$WORK/subset-run.cjs"
+cat > "$DRIVER" <<'JS'
+const subsetFont = require('subset-font');
+const fs = require('fs');
+(async () => {
+  const [, , inp, out, textFile] = process.argv;
+  const text = fs.readFileSync(textFile, 'utf8');
+  const src = fs.readFileSync(inp);
+  const buf = await subsetFont(src, text, { preserveNameIds: [1, 2, 3, 4, 5, 6] });
+  fs.writeFileSync(out, buf);
+  console.log(`    ${src.length} -> ${buf.length} bytes (${(src.length / buf.length).toFixed(1)}x smaller)`);
+})().catch((e) => { console.error('✗ 子集化失败:', e); process.exit(1); });
+JS
+
+TMP_OUT="$FONT.tmp"
+"$NODE_BIN" "$(native "$DRIVER")" "$(native "$FULL")" "$(native "$TMP_OUT")" "$(native "$GLYPHS")"
+mv "$TMP_OUT" "$FONT"
+
+echo "=== 完成 ==="
+echo "    字体: $FONT ($(du -h "$FONT" | cut -f1))"
+echo "    校验: workflow/scripts/gf-run.sh -p $PROJECT res://tests/test_font.gd"

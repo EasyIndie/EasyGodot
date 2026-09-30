@@ -109,3 +109,5 @@ workflow/scripts/gf-pages.sh games/puzzle-core --deploy     # 强推到 gh-pages
 
 - [Godot Engine](https://godotengine.org/) 4.7.2（MIT）
 - [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（SIL OFL 1.1）
+  —— 已用 `workflow/scripts/gf-font-subset.sh` 按项目实际用字裁剪为 **272KB 子集**
+  （原字体 16.4MB），由 `tests/test_font.gd` 守卫生效

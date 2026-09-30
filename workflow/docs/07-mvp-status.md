@@ -119,7 +119,14 @@ pi 里：`/test` `/serve` `/shot` `/games`
 - 单线程 HTTP server（`python -m http.server`）会被一次中断的下载**永久卡死** → 必须多线程。
 - 浏览器对 `index.pck` 缓存极顽固 → 用 `gf-serve.sh`（`Cache-Control: no-store`）。
 - Godot 4 坑：`Vector3i` 无 `dot()`；`Array.sort()` 不能排 `Vector3i`（用 `sort_custom`）；
-  版本头污染 stdout（用 `--no-header`）；默认字体无中文字形（已内置 Noto Sans SC）。
+  版本头污染 stdout（用 `--no-header`）；默认字体无中文字形（已内置 Noto Sans SC **子集**）。
+- **内置字体必须是子集**：Noto Sans SC 完整字体 16MB+，Web 要下载它、移动端还要常驻内存
+  （iOS Safari 对单标签页内存极敏感）。用 `workflow/scripts/gf-font-subset.sh`
+  按项目实际用字裁剪：**16.4MB → 272KB**，pck 从 **14.5MB → 320KB**（下载总量减少约 26%）。
+  `tests/test_font.gd` 是守卫：新增文案若用到子集外的字会直接测试失败（避免豆腐块）。
+  > 注意：该测试只扫描**会渲染文字**的来源（`scenes/`、`meta/`、`project.godot`、`levels/`），
+  > 必须与 `gf-font-subset.sh` 里的 `UI_SOURCES` 保持一致；core/solver/tools/tests 是 headless 层，
+  > 不渲染文字，其注释里的符号（如 `∘`）也未必存在于 Noto Sans SC。
 - **WSL 的 drvfs 挂载下 `core.fileMode=false`**：git 无法记录执行位，所有文件都入库为 `100644`，
   于 CI 里直接调用 `workflow/scripts/gf-test.sh` 会报 `Permission denied`（真实踩过）。
   解决：`git update-index --chmod=+x workflow/scripts/*.sh` 显式标注。
