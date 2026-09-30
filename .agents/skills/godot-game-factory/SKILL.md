@@ -83,6 +83,8 @@ workflow/scripts/gf-run.sh -p games/puzzle-core res://tools/build_level_set.gd
 ## 导出构建
 
 ```bash
+workflow/scripts/gf-check-exec.sh                 # 检查脚本执行位（WSL 下 git 记不住权限，CI 会 Permission denied）
+workflow/scripts/gf-web-inject.sh                 # 把 workflow/web/head_include.html 同步进 export_presets.cfg
 workflow/scripts/gf-export.sh                     # Web + Linux + Windows，产物在 games/puzzle-core/build/
 workflow/scripts/gf-export.sh games/puzzle-core windows   # 只导指定平台
 workflow/scripts/gf-package.sh                    # 打 Steam Demo 分发包（dist/*.zip）
