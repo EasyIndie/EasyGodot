@@ -9,6 +9,7 @@ const Loader = preload("res://core/level_loader.gd")
 const Fixtures = preload("res://tests/fixtures.gd")
 const Progress = preload("res://meta/progress.gd")
 const TouchControls = preload("res://meta/touch_controls.gd")
+const UiLayout = preload("res://meta/ui_layout.gd")
 
 var checks: int = 0
 var failures: int = 0
@@ -224,16 +225,21 @@ func _remove_tmp(path: String) -> void:
 
 func _test_touch_controls() -> void:
 	# 触屏操作层：滑动方向映射、按钮联动、不与选关/过渡打架
-	# 1) 静态的滑动→方向映射（与键盘一致：右=+x 左=-x 下=+z 上=-z）
-	check(TouchControls.swipe_dir(Vector2(80, 0)) == Vector3i(1, 0, 0), "右滑应映射 +x")
-	check(TouchControls.swipe_dir(Vector2(-80, 0)) == Vector3i(-1, 0, 0), "左滑应映射 -x")
-	check(TouchControls.swipe_dir(Vector2(0, 80)) == Vector3i(0, 0, 1), "下滑应映射 +z")
-	check(TouchControls.swipe_dir(Vector2(0, -80)) == Vector3i(0, 0, -1), "上滑应映射 -z")
+	# 1) 滑动→方向：必须按**屏幕方向**映射（往哪滑、方块就往哪滚）
+	#    斜 45° 等距相机：-z 右上、+x 右下、+z 左下、-x 左上
+	check(TouchControls.swipe_dir(Vector2(80, -56)) == Vector3i(0, 0, -1), "右上滑应映射 -z")
+	check(TouchControls.swipe_dir(Vector2(80, 56)) == Vector3i(1, 0, 0), "右下滑应映射 +x")
+	check(TouchControls.swipe_dir(Vector2(-80, 56)) == Vector3i(0, 0, 1), "左下滑应映射 +z")
+	check(TouchControls.swipe_dir(Vector2(-80, -56)) == Vector3i(-1, 0, 0), "左上滑应映射 -x")
 	check(TouchControls.swipe_dir(Vector2(10, 4)) == Vector3i.ZERO, "过短位移不应算滑动")
-	check(TouchControls.swipe_dir(Vector2(70, 30)) == Vector3i(1, 0, 0), "斜向滑动应取主导轴（x）")
-	check(TouchControls.swipe_dir(Vector2(25, 70)) == Vector3i(0, 0, 1), "斜向滑动应取主导轴（y）")
+	# 旧行为（按网格轴映射）是错的：向上滑曾经会让方块往右上滚
+	check(TouchControls.swipe_dir(Vector2(0, -100)) != Vector3i(1, 0, 0),
+		"正上方滑动绝不能是「右下」方向（那是旧轴映射的 bug）")
 
 	var scene = load("res://scenes/main.tscn").instantiate()
+	# 显式设定视口尺寸：headless 下默认窗口尺寸不可靠（get_visible_rect 可能为 0，
+	# 会让「顶部/底部提示带」的判定错位）
+	root.size = Vector2i(1280, 720)
 	root.add_child(scene)
 	await process_frame
 	check(scene.touch_controls != null, "主场景应创建触屏操作层")
@@ -246,6 +252,37 @@ func _test_touch_controls() -> void:
 	scene._apply_touch_visibility()
 	check(scene.touch_controls.is_shown(), "?touch=1 / 触屏设备应显示控件")
 	check(scene.touch_controls.bottom_inset() > 0.0, "应报告底部占位高度（供提示文案避让）")
+
+	# 2b) 相机应把「每个网格方向的屏幕方向」注入给操作层（换取景自动跟随）
+	var dirs: Dictionary = scene.touch_controls._screen_dirs
+	check(dirs.size() == 4, "应从相机注入 4 个方向，got=%d" % dirs.size())
+	if dirs.size() == 4:
+		var dz: Vector2 = dirs[Vector3i(0, 0, -1)]
+		var dx: Vector2 = dirs[Vector3i(1, 0, 0)]
+		check(dz.x > 0.0 and dz.y < 0.0, "-z 在屏幕上应是右上（got=%s）" % str(dz))
+		check(dx.x > 0.0 and dx.y > 0.0, "+x 在屏幕上应是右下（got=%s）" % str(dx))
+		# 注入的实际方向也应与默认基准一致，否则两份映射会不一致
+		for d in dirs.keys():
+			check(dirs[d].dot(UiLayout.DEFAULT_SCREEN_DIRS[d]) > 0.99,
+				"相机实测的 %s 屏幕方向应与默认基准一致" % str(d))
+
+	# 2c) 状态提示不得落在屏幕垂直中部（会遮挡棋盘，玩家看不到自己刚做了什么）
+	scene.fail_label.text = "坠落！方块掉出了棋盘"
+	scene.fail_label.visible = true
+	scene._refresh_bands()
+	await process_frame
+	var vp_h: float = scene.get_viewport().get_visible_rect().size.y
+	check(vp_h > 100.0, "测试视口高度应有效，got=%.0f" % vp_h)
+	var band_mid: float = scene.fail_label.position.y + scene.fail_label.size.y * 0.5
+	check(absf(band_mid - vp_h * 0.5) > vp_h * 0.25,
+		"坠落提示不应在屏幕垂直中部（mid=%.0f vp=%.0f）" % [band_mid, vp_h])
+	var band_bottom: float = scene.fail_label.position.y + scene.fail_label.size.y
+	check(scene.fail_label.position.y >= -1.0 and band_bottom <= vp_h + 1.0,
+		"坠落提示应完整落在屏幕内（top=%.0f bottom=%.0f vp=%.0f）" % [scene.fail_label.position.y, band_bottom, vp_h])
+	check(not scene.help_label.visible, "有状态提示时操作提示应让位（同一条带不压字）")
+	scene.fail_label.visible = false
+	scene._refresh_bands()
+	check(scene.help_label.visible, "状态提示收起后操作提示应回来")
 
 	# 3) 方向信号应真的驱动方块
 	var before: int = scene.game.move_count

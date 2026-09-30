@@ -131,6 +131,13 @@ pi 里：`/test` `/serve` `/shot` `/games`
 - **手机竖屏必须自己拉远相机**：`Camera3D.fov` 默认是竖向 FOV，
   竖屏时横向可视范围更窄，用桌面调好的距离会把棋盘左右切掉。
   见 `meta/ui_layout.gd::camera_distance()`（比例 ≥ 1 时旧行为不变）。
+- **状态提示不要放屏幕正中**：会直接压在棋盘上，玩家看不到自己刚做了什么
+  （真实反馈）。统一走 `main.gd::_refresh_bands()` 的「提示带」：
+  桌面底部 / 触屏竖屏顶部 / 触屏横屏底部，且同一条带只显示优先级最高的一条。
+- **触屏是指向性输入，不能沿用键盘的网格轴映射**（真实反馈）：斜 45° 等距相机下
+  四个网格方向在屏幕上成对角分布，按键盘那样「上滑 = -z」会让方块往右上滚。
+  屏幕方向应由相机 `unproject` 现算后注入（`main.gd::_update_touch_screen_dirs`），
+  D-pad 也相应转成斜向菱形，做到「按钮位置 / 箭头 / 方块去向」三者一致。
 - **WSL 的 drvfs 挂载下 `core.fileMode=false`**：git 无法记录执行位，所有文件都入库为 `100644`，
   于 CI 里直接调用 `workflow/scripts/gf-test.sh` 会报 `Permission denied`（真实踩过）。
   解决：`git update-index --chmod=+x workflow/scripts/*.sh` 显式标注。

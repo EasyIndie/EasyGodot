@@ -68,7 +68,9 @@ func _ready() -> void:
 	game.won.connect(_on_won)
 	game.fell.connect(_on_fell)
 	_load_level(0, false)
-	_refresh_help()
+	_refresh_bands()
+	if not get_viewport().size_changed.is_connected(_refresh_bands):
+		get_viewport().size_changed.connect(_refresh_bands)
 
 
 func _query_flag(name: String) -> bool:
@@ -102,6 +104,7 @@ func _apply_touch_visibility() -> void:
 		return
 	var hud_hidden: bool = hud_layer != null and not hud_layer.visible
 	touch_controls.set_shown(_touch_active and not hud_hidden)
+	_refresh_bands()
 
 
 func _on_touch_direction(d: Vector3i) -> void:
@@ -113,23 +116,32 @@ func _on_touch_direction(d: Vector3i) -> void:
 	_do_move(d)
 
 
-func _refresh_help() -> void:
+func _refresh_bands() -> void:
+	# 统一安排「提示带」：
+	#   桌面          -> 底部（棋盘下方，原本帮助文字的位置）
+	#   触屏竖屏      -> 顶部（HUD 下方；底部被方向键/动作按钮占用）
+	#   触屏横屏      -> 底部（控件下方的一条窄带）
+	# 这样任何设备/朝向下，状态提示都不会压住棋盘。
 	if help_label == null:
 		return
-	if touch_controls != null and touch_controls.is_shown():
-		# 触屏时控件占据底部，提示改放**顶部**（HUD 下方），
-		# 否则横屏会直接压在棋盘上
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var touch_on: bool = touch_controls != null and touch_controls.is_shown()
+	var at_top: bool = touch_on and vp.y >= vp.x
+	for l in [help_label, win_label, fail_label, replay_label]:
+		if l == null:
+			continue
+		l.anchor_left = 0.0
+		l.anchor_right = 1.0
+		l.anchor_top = 0.0 if at_top else 1.0
+		l.anchor_bottom = l.anchor_top
+		l.offset_top = 98.0 if at_top else -52.0
+		l.offset_bottom = 142.0 if at_top else -8.0
+	if touch_on:
 		help_label.text = "滑动屏幕，或点按左下方向键移动"
-		help_label.anchor_top = 0.0
-		help_label.anchor_bottom = 0.0
-		help_label.offset_top = 98.0
-		help_label.offset_bottom = 124.0
 	else:
 		help_label.text = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     ·     掉出棋盘或落入空洞会坠落"
-		help_label.anchor_top = 1.0
-		help_label.anchor_bottom = 1.0
-		help_label.offset_top = -36.0
-		help_label.offset_bottom = -12.0
+	# 同一条带只显示优先级最高的一条
+	help_label.visible = not (win_label.visible or fail_label.visible or replay_label.visible)
 
 
 func _scan_levels() -> Array:
@@ -209,6 +221,7 @@ func _do_load(index: int) -> void:
 		replay_label.visible = false
 		_frame_camera()
 		_update_hud()
+		_refresh_bands()
 
 
 ## 换关：棋盘下沉 + 暗幕淡入（“关卡合拢”）→ 暗幕下换关 → 新棋盘降入 + 淡出
@@ -343,6 +356,7 @@ func _play_replay() -> void:
 			break
 		replay_label.text = "回放　%d / %d　（Esc 退出）" % [i + 1, moves.size()]
 		replay_label.visible = true
+		_refresh_bands()
 		game.try_move(Moves.direction_from_label(str(moves[i])))
 		while game.animating:
 			await get_tree().process_frame
@@ -354,6 +368,7 @@ func _play_replay() -> void:
 	await get_tree().create_timer(0.7).timeout
 	_replaying = false
 	_do_load(current_index)   # 复位，方便玩家接着挑战
+	_refresh_bands()
 
 
 func _restart() -> void:
@@ -376,14 +391,16 @@ func _on_won() -> void:
 	_update_hud()
 	# 回放中到达终点：只提示，不记录进度、不自动换关
 	if _replaying:
-		win_label.text = "回放到达终点　·　%d 步" % game.move_count
-		win_label.visible = true
+		replay_label.text = "回放到达终点　·　%d 步" % game.move_count
+		replay_label.visible = true
+		_refresh_bands()
 		await _win_beat()
 		return
 	var res: Dictionary = progress.record_win(_level_key(current_index), _run_moves)
 	_update_hud()
 	win_label.text = _win_text(res)
 	win_label.visible = true
+	_refresh_bands()
 	# 通关反馈：灯光脉冲一下（方块保持原位、不变色），随后自然滚动换关
 	await _win_beat()
 	if transitioning or levels.is_empty():
@@ -415,9 +432,15 @@ func _on_fell() -> void:
 	if _replaying:
 		fail_label.text = "回放异常结束　（Esc 退出）"
 		fail_label.visible = true
+		_refresh_bands()
 		return
-	fail_label.text = "坠落! 方块掉出了棋盘   (按 R 重开)"
+	# 触屏上没有 R 键，提示改成指向屏幕上的「重开」按钮
+	if touch_controls != null and touch_controls.is_shown():
+		fail_label.text = "坠落！方块掉出了棋盘"
+	else:
+		fail_label.text = "坠落！方块掉出了棋盘　（按 R 重开）"
 	fail_label.visible = true
+	_refresh_bands()
 
 
 func _update_hud() -> void:
@@ -477,7 +500,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				if touch_controls != null:
 					_touch_active = not touch_controls.is_shown()
 					_apply_touch_visibility()
-					_refresh_help()
+					_refresh_bands()
 				return
 			KEY_N:
 				_next_level()
@@ -514,6 +537,24 @@ func _frame_camera() -> void:
 	var dir := Vector3(sin(az), 1.0, cos(az)).normalized()
 	cam.position = Vector3(cx, 0.0, cz) + dir * dist
 	cam.look_at(Vector3(cx, 0.0, cz))
+	_update_touch_screen_dirs()
+
+
+func _update_touch_screen_dirs() -> void:
+	# 触屏滑动要「往哪滑、方块就往哪滚」，就必须知道每个网格方向在屏幕上的方向。
+	# 这完全由相机决定（斜 45° 等距下它们成对角分布），所以现算而不是写死，
+	# 以后换相机/换取景也不用改映射。
+	if touch_controls == null or cam == null or game == null or game.board == null:
+		return
+	var center := Vector3(float(game.board.grid_x) * 0.5, 0.0, float(game.board.grid_z) * 0.5)
+	var origin: Vector2 = cam.unproject_position(center)
+	var dirs: Dictionary = {}
+	for d in Moves.DIRS:
+		var v: Vector2 = cam.unproject_position(center + Vector3(d)) - origin
+		if v.length() > 0.0001:
+			dirs[d] = v.normalized()
+	if dirs.size() == Moves.DIRS.size():
+		touch_controls.set_screen_dirs(dirs)
 
 
 func _setup_camera() -> void:
@@ -639,28 +680,17 @@ func _setup_hud() -> void:
 	rcol.add_child(best_label)
 	right.add_child(rcol)
 
-	# ── 中央横幅（通关 / 坠落）─────────────────────────
-	win_label = _make_banner(hud, -84.0, 42, Color(0.40, 1.0, 0.60))
-	fail_label = _make_banner(hud, 84.0, 34, Color(1.0, 0.45, 0.45))
+	# ── 状态提示（通关 / 坠落 / 回放）──────────────────
+	# 刻意**不放屏幕正中**：正中会压住棋盘，玩家看不到自己刚做了什么。
+	# 它们与操作提示共用一条「提示带」，位置由 _refresh_bands() 统一决定，
+	# 且同一时刻只显示优先级最高的那条（否则会互相压字）。
+	win_label = _make_status(hud, 28, Color(0.42, 1.0, 0.62))
+	fail_label = _make_status(hud, 24, Color(1.0, 0.52, 0.52))
+	replay_label = _make_status(hud, 18, Color(0.62, 0.80, 1.0))
 
-	# ── 底部操作提示（一段时间后自动变淡，减少长期干扰）────
-	help_label = Label.new()
-	help_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	help_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	help_label.anchor_left = 0.0
-	help_label.anchor_right = 1.0
-	help_label.anchor_top = 1.0
-	help_label.anchor_bottom = 1.0
-	help_label.offset_top = -36.0
-	help_label.offset_bottom = -12.0
-	help_label.add_theme_font_size_override("font_size", 15)
-	help_label.add_theme_color_override("font_color", Color(0.80, 0.85, 0.95))
-	help_label.text = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     ·     掉出棋盘或落入空洞会坠落"
-	hud.add_child(help_label)
+	# ── 操作提示（一段时间后自动变淡，减少长期干扰）──────────
+	help_label = _make_status(hud, 15, Color(0.80, 0.85, 0.95))
 	_fade_help_later()
-
-	# ── 回放状态条（顶部，仅在回放时出现）───────────────
-	replay_label = _make_banner(hud, -170.0, 20, Color(0.62, 0.80, 1.0))
 
 
 func _make_panel(parent: Node) -> PanelContainer:
@@ -688,21 +718,19 @@ func _fade_help_later() -> void:
 		tw.tween_property(help_label, "modulate:a", 0.3, 1.2))
 
 
-func _make_banner(hud: CanvasLayer, y_offset: float, size: int, color: Color) -> Label:
-	# 屏幕居中提示条（按锚点定位，分辨率无关）
+func _make_status(hud: CanvasLayer, size: int, color: Color) -> Label:
+	# 提示带里的一条文字。位置不在这里定，由 _refresh_bands() 统一安排，
+	# 避开「各处硬写 y 偏移、改一个地方就要满处找」的维护问题。
 	var l := Label.new()
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	l.anchor_left = 0.0
-	l.anchor_right = 1.0
-	l.anchor_top = 0.5
-	l.anchor_bottom = 0.5
-	l.offset_left = 0.0
-	l.offset_right = 0.0
-	l.offset_top = y_offset - 44.0
-	l.offset_bottom = y_offset + 44.0
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	l.add_theme_font_size_override("font_size", size)
 	l.add_theme_color_override("font_color", color)
+	# 轻微阴影：提示带落在 3D 背景/棋盘上也要清楚
+	l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.7))
+	l.add_theme_constant_override("shadow_offset_x", 0)
+	l.add_theme_constant_override("shadow_offset_y", 1)
 	l.visible = false
 	hud.add_child(l)
 	return l

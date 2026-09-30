@@ -19,11 +19,13 @@ const SWIPE_MIN := 26.0        # 最小滑动距离（缓冲区像素）
 const SWIPE_MAX_TIME := 0.9    # 超过此时长不算滑动
 const SWIPE_COOLDOWN := 0.12   # 触屏会再模拟一次鼠标事件，用冷却去重
 
+# 斜 45° 等距相机下，方块只能沿四个网格方向滚，它们在屏幕上成对角分布，
+# 所以 D-pad 直接**摆在对角位置、用对角箭头**：按钮位置 / 箭头 / 方块去向三者一致。
 const GLYPH := {
-	Vector3i(0, 0, -1): "↑",
-	Vector3i(0, 0, 1): "↓",
-	Vector3i(-1, 0, 0): "←",
-	Vector3i(1, 0, 0): "→",
+	Vector3i(0, 0, -1): "↗",
+	Vector3i(1, 0, 0): "↘",
+	Vector3i(0, 0, 1): "↙",
+	Vector3i(-1, 0, 0): "↖",
 }
 
 var _pad: GridContainer
@@ -31,6 +33,7 @@ var _actions: VBoxContainer
 var _dir_buttons: Array = []
 var _action_buttons: Array = []
 var _unit: float = 64.0
+var _screen_dirs: Dictionary = {}   # 由 main.gd 用相机 unproject 现算后注入
 var _tracking: bool = false
 var _start_pos: Vector2 = Vector2.ZERO
 var _start_time: float = 0.0
@@ -54,11 +57,11 @@ func _ready() -> void:
 	_pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_pad)
 
-	# 3×3：四角与中心留空
+	# 3×3：把四个方向放在**四角**（＝屏幕上的四个对角），中心与四边留空
 	var cells: Array = [
-		null, Vector3i(0, 0, -1), null,
-		Vector3i(-1, 0, 0), null, Vector3i(1, 0, 0),
-		null, Vector3i(0, 0, 1), null,
+		Vector3i(-1, 0, 0), null, Vector3i(0, 0, -1),
+		null, null, null,
+		Vector3i(0, 0, 1), null, Vector3i(1, 0, 0),
 	]
 	for c in cells:
 		if c == null:
@@ -102,6 +105,11 @@ func is_shown() -> bool:
 func bottom_inset() -> float:
 	# 底部被控件占用的高度（供 HUD 提示文字避让）
 	return _unit * 3.0 + _unit * 0.68
+
+
+func set_screen_dirs(dirs: Dictionary) -> void:
+	# 注入「每个网格方向在屏幕上的方向」——由相机决定，换取景自动跟随
+	_screen_dirs = dirs
 
 
 # ── 布局 ───────────────────────────────────────────────
@@ -158,13 +166,13 @@ func _process(delta: float) -> void:
 		_cooldown -= delta
 
 
-static func swipe_dir(delta: Vector2) -> Vector3i:
-	# 屏幕位移 → 网格方向，与键盘一致：右=+x、左=-x、下=+z、上=-z
+static func swipe_dir(delta: Vector2, screen_dirs: Dictionary = {}) -> Vector3i:
+	# 滑动方向 → 网格方向：**按屏幕上最接近的方向**映射（而不是按网格轴），
+	# 这样「往哪滑，方块就往哪滚」。触碰阈值以下的位移不算滑动。
 	if delta.length() < SWIPE_MIN:
 		return Vector3i.ZERO
-	if absf(delta.x) >= absf(delta.y):
-		return Vector3i(1, 0, 0) if delta.x > 0.0 else Vector3i(-1, 0, 0)
-	return Vector3i(0, 0, 1) if delta.y > 0.0 else Vector3i(0, 0, -1)
+	var dirs: Dictionary = screen_dirs if not screen_dirs.is_empty() else LAYOUT.DEFAULT_SCREEN_DIRS
+	return LAYOUT.best_dir(delta, dirs)
 
 
 func _input(event: InputEvent) -> void:
@@ -196,7 +204,7 @@ func _finish(pos: Vector2) -> void:
 		return  # 触屏→鼠标的重复投递
 	if Time.get_ticks_msec() / 1000.0 - _start_time > SWIPE_MAX_TIME:
 		return
-	var d: Vector3i = swipe_dir(pos - _start_pos)
+	var d: Vector3i = swipe_dir(pos - _start_pos, _screen_dirs)
 	if d != Vector3i.ZERO:
 		_cooldown = SWIPE_COOLDOWN
 		direction.emit(d)

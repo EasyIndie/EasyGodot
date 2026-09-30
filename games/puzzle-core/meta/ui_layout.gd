@@ -42,3 +42,35 @@ static func level_grid(viewport: Vector2, count: int) -> Dictionary:
 	var avail: float = viewport.x * 0.90 - gap * float(cols - 1)
 	var card_w: float = clampf(avail / float(cols), 76.0, 118.0)
 	return {"columns": cols, "card": Vector2(card_w, card_w * 0.77), "gap": gap}
+
+
+# 斜 45° 等距相机下，四个网格方向在**屏幕上**的单位方向（x 向右、y 向下）。
+# 列一下就很清楚：-z 是右上、+x 是右下、+z 是左下、-x 是左上。
+# 触屏是**指向性输入**，必须按这个来映射，否则「向上滑」会让方块往右上滚。
+# （真正的值会由 main.gd 用相机 unproject 现算后覆盖，这里只是默认值/测试基准）
+const DEFAULT_SCREEN_DIRS := {
+	Vector3i(1, 0, 0): Vector2(0.8165, 0.5774),
+	Vector3i(-1, 0, 0): Vector2(-0.8165, -0.5774),
+	Vector3i(0, 0, 1): Vector2(-0.8165, 0.5774),
+	Vector3i(0, 0, -1): Vector2(0.8165, -0.5774),
+}
+
+
+static func best_dir(swipe: Vector2, screen_dirs: Dictionary) -> Vector3i:
+	# 把滑动方向映射到**屏幕上最接近**的网格方向（与相机取景一致）。
+	# 完全竖直/水平的滑动会落在两个方向的正中间（平局），此时按字典插入顺序取第一个，
+	# 保证同一手势结果稳定；玩家只要斜一点滑就能精确指向。
+	if swipe.length() < 0.0001:
+		return Vector3i.ZERO
+	var s: Vector2 = swipe.normalized()
+	var best: Vector3i = Vector3i.ZERO
+	var best_score: float = -2.0
+	for d in screen_dirs.keys():
+		var v: Vector2 = screen_dirs[d]
+		if v.length() < 0.0001:
+			continue
+		var score: float = s.dot(v.normalized())
+		if score > best_score + 0.000001:
+			best_score = score
+			best = d
+	return best

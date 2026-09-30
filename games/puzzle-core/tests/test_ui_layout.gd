@@ -17,6 +17,7 @@ func _init() -> void:
 	_test_camera_portrait()
 	_test_camera_always_fits()
 	_test_touch_unit()
+	_test_best_dir()
 	_test_level_grid()
 
 	print(JSON.stringify({
@@ -91,6 +92,28 @@ func _test_touch_unit() -> void:
 	check(L.touch_unit(Vector2(480, 320)) >= 48.0, "小屏不应低于下限")
 	# 可点面积（手机下 1 缓冲像素 = 0.5 CSS px）应远大于 44 CSS px 的最低要求
 	check(up * 0.5 > 44.0, "触屏可点面积应足够大，got=%.1f CSS px" % (up * 0.5))
+
+
+func _test_best_dir() -> void:
+	# 触屏是**指向性输入**：滑向哪里，方块就该滚向哪里。
+	# 斜 45° 等距相机下四个网格方向的屏幕方向：-z 右上、+x 右下、+z 左下、-x 左上。
+	var dirs: Dictionary = L.DEFAULT_SCREEN_DIRS
+	check(L.best_dir(Vector2(1, -0.7), dirs) == Vector3i(0, 0, -1), "右上滑应映射 -z")
+	check(L.best_dir(Vector2(1, 0.7), dirs) == Vector3i(1, 0, 0), "右下滑应映射 +x")
+	check(L.best_dir(Vector2(-1, 0.7), dirs) == Vector3i(0, 0, 1), "左下滑应映射 +z")
+	check(L.best_dir(Vector2(-1, -0.7), dirs) == Vector3i(-1, 0, 0), "左上滑应映射 -x")
+	check(L.best_dir(Vector2.ZERO, dirs) == Vector3i.ZERO, "零位移应返回零方向")
+
+	# 关键性质：沿某方向的屏幕方向滑动，必须映射回它自己（保证「往哪滑就往哪滚」）
+	for d in dirs.keys():
+		var v: Vector2 = dirs[d]
+		check(L.best_dir(v * 120.0, dirs) == d, "沿 %s 的屏幕方向滑动应映射回自身" % str(d))
+
+	# 完全竖直/水平的滑动落在两个方向的正中间（平局）
+	var up: Vector3i = L.best_dir(Vector2(0, -100), dirs)
+	check(up == Vector3i(0, 0, -1) or up == Vector3i(-1, 0, 0),
+		"正上方滑动应落在两个「上」方向之一，got=%s" % str(up))
+	check(L.best_dir(Vector2(0, -100), dirs) == up, "平局结果必须稳定（同一手势不能忽左忽右）")
 
 
 func _test_level_grid() -> void:
