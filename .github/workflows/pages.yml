@@ -72,6 +72,9 @@ jobs:
         # 首次导出前需要建立 .godot 导入缓存；个别非致命告警不影响导出
         run: workflow/godot-bin/godot --headless --path "$PROJECT" --import || true
 
+      - name: 检查脚本执行位（WSL/Windows 下 git 记不住权限，CI 会 Permission denied）
+        run: workflow/scripts/gf-check-exec.sh
+
       - name: 跑测试（关卡包门禁）
         run: workflow/scripts/gf-test.sh "$PROJECT"
 
