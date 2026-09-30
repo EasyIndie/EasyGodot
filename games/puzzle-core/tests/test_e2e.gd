@@ -39,6 +39,7 @@ func _run() -> void:
 	await _test_level_select()
 	await _test_replay_playback()
 	await _test_touch_controls()
+	await _test_move_animation_geometry()
 	await _test_respawn_animation()
 	await _test_swipe_hint()
 	await _test_touch_safe_area()
@@ -78,7 +79,7 @@ func _test_game_direct() -> void:
 	check(game.level_id == "fixture_8moves", "level_id 应为 fixture_8moves")
 	var tiles: int = game.board.grid_x * game.board.grid_z - game.board.holes.size()
 	check(game.board_root != null and game.tile_count() == tiles, "棋盘应只渲染实心瓦片（空洞留空）")
-	check(game.block.get_child_count() == game.state.world_cells().size(), "方块单元数应等于世界单元数")
+	check(game.block_mesh_count() == game.state.world_cells().size(), "方块单元数应等于世界单元数")
 
 	# 用求解器的解驱动游戏，验证视觉层与 core 协同
 	var sol: Dictionary = Solver.new(game.board, game.state).solve()
@@ -110,7 +111,7 @@ func _test_tiny_level() -> void:
 	check(game.load_dict(Loader.load_dict(Fixtures.tiny_level())), "tiny 夹具应加载成功")
 	check(game.state.shape.id == "domino", "形状应为 domino")
 	check(game.state.world_cells().size() == 2, "竖立骨牌应占 2 格")
-	check(game.block.get_child_count() == 2, "骨牌应渲染 2 个单元")
+	check(game.block_mesh_count() == 2, "骨牌应渲染 2 个单元")
 	var tiles: int = game.board.grid_x * game.board.grid_z - game.board.holes.size()
 	check(game.tile_count() == tiles, "棋盘渲染应正确")
 
@@ -152,7 +153,7 @@ func _test_all_levels_render() -> void:
 		game.animate = false
 		root.add_child(game)
 		check(game.load_dict(lv), "视觉层应能加载: " + p)
-		check(game.block.get_child_count() == game.state.world_cells().size(), "方块单元数应正确: " + p)
+		check(game.block_mesh_count() == game.state.world_cells().size(), "方块单元数应正确: " + p)
 		var tiles: int = game.board.grid_x * game.board.grid_z - game.board.holes.size()
 		check(game.tile_count() == tiles, "棋盘渲染应正确: " + p)
 		shapes[game.state.shape.id] = true
@@ -595,3 +596,116 @@ func _test_ending() -> void:
 	await create_timer(0.3).timeout
 	scene.free()
 	_remove_tmp(tmp)
+
+
+func _test_move_animation_geometry() -> void:
+	# 回归测试：**状态对、但画出来的方块错位**。
+	# 真实 bug：落地挤压缩放的是 block 节点，而它的子网格用的是世界格坐标 ——
+	# 缩放父节点会把子节点的位置一起缩放，于是方块每走一步都朝世界原点窜一下。
+	# 这类问题纯逻辑测试完全测不到，必须断言「渲染出来的位置」。
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(960, 540)
+	root.add_child(scene)
+	await process_frame
+	# 用一盘大关卡：离原点越远，缩放导致的位移越明显
+	scene._load_level(9, false)
+	await process_frame
+	check(scene.game.animate, "交互场景应开启动画")
+
+	# 1) 静止时：渲染位置必须与状态单元一一对应
+	_eq_centers(scene.game.block_mesh_centers(), scene.game.state.world_cells(), "静止时渲染位置应与状态一致")
+
+	# 2) 移动过程中：**不允许出现任何挤压**（方块是刚体，每步都果冻一下像渲染故障），
+	#    并且**每一帧**方块都必须待在棋盘附近。
+	#    这条中间帧不变式是关键：真实 bug 是「动画期间整块被平移（甚至闪到世界原点），
+	#    但落点因为重建而显示正常」—— 只查开始/结束位置完全测不出来。
+	var d: Vector3i = scene.game.core.legal_moves()[0]
+	var c0: Vector3 = _centroid(scene.game.block_mesh_centers())
+	var step: Dictionary = scene.game._plan_move(d)
+	var c1: Vector3 = _centroid(_as_centers(step["to_cells"]))
+	scene.game.try_move(d)
+	var scaled_during := false
+	var stray_frames: int = 0
+	var guard: int = 0
+	while scene.game.animating and guard < 400:
+		if scene.game._block_pivot.scale.distance_to(Vector3.ONE) > 0.001:
+			scaled_during = true
+		var c: Vector3 = _centroid(scene.game.block_mesh_centers())
+		if _dist_to_segment(c, c0, c1) > 1.0:
+			stray_frames += 1
+		await process_frame
+		guard += 1
+	check(not scene.game.animating, "翻滚动画应结束")
+	check(not scaled_during, "普通移动过程中不应有挤压缩放（只允许重生落地那一次）")
+	check(stray_frames == 0,
+		"动画每一帧方块都应贴着起点→终点这条弧线（有 %d 帧跑偏）" % stray_frames)
+
+	# 3) 移动结束后：渲染位置仍必须与状态一一对应（缩放不能残留、不能平移）
+	_eq_centers(scene.game.block_mesh_centers(), scene.game.state.world_cells(), "移动后渲染位置应与状态一致")
+	check(scene.game.block.scale.distance_to(Vector3.ONE) < 0.001, "移动后 block 不应残留缩放")
+	check(scene.game._block_pivot.scale.distance_to(Vector3.ONE) < 0.001, "移动后 pivot 不应残留缩放")
+
+	# 4) 连续走多步，误差不允许累积。
+	# 注意：随便走会掉下去或提前到终点（那时方块已被销毁/已复位），
+	# 这两种情况都不是本测试要查的，遇到就停。
+	var alive: bool = true
+	for _i in range(3):
+		if scene.game.is_lost() or scene.game.is_won():
+			alive = false
+			break
+		var legal: Array = scene.game.core.legal_moves()
+		if legal.is_empty():
+			break
+		scene.game.try_move(legal[0])
+		guard = 0
+		while scene.game.animating and guard < 400:
+			await process_frame
+			guard += 1
+	if alive and not scene.game.is_lost() and not scene.game.is_won():
+		_eq_centers(scene.game.block_mesh_centers(), scene.game.state.world_cells(),
+			"连续移动后渲染位置应与状态一致")
+	await create_timer(0.2).timeout
+	scene.free()
+
+
+func _centroid(pts: Array) -> Vector3:
+	var c := Vector3.ZERO
+	for p in pts:
+		c += p
+	return c / float(maxi(pts.size(), 1))
+
+
+func _as_centers(cells: Array) -> Array:
+	var out: Array = []
+	for c in cells:
+		out.append(Vector3(float(c.x), float(c.y) + 0.5, float(c.z)))
+	return out
+
+
+func _dist_to_segment(p: Vector3, a: Vector3, b: Vector3) -> float:
+	# 点到线段距离：翻滚时质心只会在起点→终点之间划一段小弧（半径 ~1.1 的 90° 弧），
+	# 所以“偏离这条线段超过 1.0”就意味着整块被平移走了（例如闪到世界原点）。
+	var ab: Vector3 = b - a
+	var denom: float = ab.length_squared()
+	if denom < 0.000001:
+		return p.distance_to(a)
+	var t: float = clampf((p - a).dot(ab) / denom, 0.0, 1.0)
+	return p.distance_to(a + ab * t)
+
+
+func _eq_centers(got: Array, cells: Array, msg: String) -> void:
+	# 把状态单元换算成「单元中心」再逐项比对（渲染把方块抬高 0.5 贴地）
+	var want: Array = []
+	for c in cells:
+		want.append(Vector3(float(c.x), float(c.y) + 0.5, float(c.z)))
+	want.sort_custom(func(a, b) -> bool:
+		if a.x != b.x: return a.x < b.x
+		if a.z != b.z: return a.z < b.z
+		return a.y < b.y)
+	check(got.size() == want.size(), "%s（数量 %d vs %d）" % [msg, got.size(), want.size()])
+	if got.size() != want.size():
+		return
+	for i in range(want.size()):
+		check(got[i].distance_to(want[i]) < 0.02,
+			"%s（第 %d 项 %.2f,%.2f,%.2f vs %.2f,%.2f,%.2f）" % [msg, i,
+				got[i].x, got[i].y, got[i].z, want[i].x, want[i].y, want[i].z])

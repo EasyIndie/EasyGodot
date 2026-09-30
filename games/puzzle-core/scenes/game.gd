@@ -36,13 +36,14 @@ const COLOR_GOAL_RING := Color(0.35, 1.00, 0.70) # 目标“光圈”（嵌在�
 # 落地回弹的挤压幅度：很小的数值就有明显的“重量感”，是性价比最高的一档手感反馈
 const LAND_SQUASH := 0.16
 const SPAWN_HEIGHT := 7.0      # 重开时方块落下的起始高度
-const SPAWN_TIME := 0.5        # 落下时长
+const SPAWN_TIME := 0.38       # 落下时长
 
 var core = null          # puzzle_core 实例
 var board = null         # Board 实例
 var state = null         # PuzzleState 实例
 var level_id: String = ""
 var block: Node3D = null
+var _block_pivot: Node3D = null   # 位于方块质心的支点（挤压绕它做，避免缩放导致平移）
 var board_root: Node3D = null
 var tiles: Array = []        # 全部实心瓦片
 var goal_tiles: Array = []   # 目标格（呼吸发光）
@@ -156,13 +157,17 @@ func _start_roll(d: Vector3i, st: Dictionary) -> void:
 	animating = true
 	var supported: bool = bool(st["supported"])
 	var cs: Vector3 = _cells_center(st["from_cells"])
+	# 搬运单元到 rig：rig 的原点**就是质心**（与 _block_pivot 一致），
+	# 所以这里**不能**再减一次质心 —— 单元位置本来就是相对质心的。
+	# （早期单元位置是绝对格坐标，那时才需要 -= cs；改成 pivot 之后忘了同步这一句，
+	#   结果方块在整个翻滚动画里被平移到棋盘外，落点却因为重建而看起来正常。）
 	var rig := Node3D.new()
 	rig.name = "RollRig"
+	rig.position = cs   # 立刻摆到质心：tween 要下一帧才求值，不预设会闪一帧世界原点
 	add_child(rig)
-	for cube in block.get_children().duplicate():
-		block.remove_child(cube)
+	for cube in _block_meshes().duplicate():
+		_block_pivot.remove_child(cube)
 		rig.add_child(cube)
-		cube.position -= cs
 
 	var m: Array = Moves.roll_rotation(d)
 	var q_step: Quaternion = Basis(Vector3(m[0]), Vector3(m[1]), Vector3(m[2])).get_rotation_quaternion()
@@ -193,14 +198,14 @@ func check_fall() -> bool:
 		return true
 	animating = true
 	var c: Vector3 = _cells_center(cells)
-	# 同样用刚体节点承载方块（单元位置改为相对质心）
+	# 同样用刚体节点承载方块（rig 原点 = 质心，单元位置本来就是相对质心的）
 	var rig := Node3D.new()
 	rig.name = "FallRig"
+	rig.position = c    # 同上：避免第一帧闪现在世界原点
 	add_child(rig)
-	for cube in block.get_children().duplicate():
-		block.remove_child(cube)
+	for cube in _block_meshes().duplicate():
+		_block_pivot.remove_child(cube)
 		rig.add_child(cube)
-		cube.position -= c
 	_tween = create_tween()
 	# 原地失去支撑：没有翻滚动作，直接按支撑情况坠落
 	_append_fall(rig, c, cells, Quaternion.IDENTITY, Vector3.RIGHT, 0.0)
@@ -307,7 +312,9 @@ func _finish_move(supported: bool) -> void:
 		fell.emit()
 		return
 	_position_block()
-	play_land_squash()
+	# 刻意**不在每次移动后做挤压**：方块是刚体几何，每一步都“果冻”一下
+	# 读起来像渲染故障而不是重量感（真实反馈：方块移动动画很奇怪）。
+	# 挤压只留给「坠落重生落地」那一次 —— 那时它是“冲击”，语义成立。
 	moved.emit()
 	if board.is_goal(state.world_cells()):
 		won_flag = true
@@ -423,7 +430,19 @@ func _build_block() -> void:
 	block = Node3D.new()
 	block.name = "Block"
 	add_child(block)
+	# 单元的父节点放在**质心**，而不是世界原点。
+	# 这样对 pivot 做 scale（落地挤压）才是「以自身为中心」缩放；
+	# 直接缩放 block 会把子节点用世界格坐标写下的位置一起缩放 ——
+	# 结果就是方块每走一步都往坐标系深处“窜”一下（格子越远窜得越多）。
+	_block_pivot = Node3D.new()
+	_block_pivot.name = "BlockPivot"
+	block.add_child(_block_pivot)
 	_block_mat = _make_block_material(COLOR_BLOCK)
+
+
+func _block_meshes() -> Array:
+	# 承载方块形态的单元网格（挂在质心 pivot 下）
+	return _block_pivot.get_children() if _block_pivot != null else []
 
 
 func _make_block_material(base: Color) -> ShaderMaterial:
@@ -455,12 +474,17 @@ void fragment() {
 
 
 func _position_block() -> void:
-	# 通用 PolyCube 渲染：每个世界单元画一个 1x1x1 立方体（对任意形状/方向都成立）
-	_free_children(block)
-	for cell in state.world_cells():
+	# 通用 PolyCube 渲染：每个世界单元画一个 1x1x1 立方体（对任意形状/方向都成立）。
+	# 单元位置**相对质心**，pivot 摆在质心 —— 于是 pivot.scale 等价于绕自身中心的挤压。
+	_free_children(_block_pivot)
+	var cells: Array = state.world_cells()
+	var cs: Vector3 = _cells_center(cells)
+	_block_pivot.position = cs
+	_block_pivot.scale = Vector3.ONE   # 清掉上一段挤压可能残留的缩放
+	for cell in cells:
 		var m := _make_box(Vector3(1.0, 1.0, 1.0), _block_mat)
-		m.position = Vector3(float(cell.x), float(cell.y) + 0.5, float(cell.z))
-		block.add_child(m)
+		m.position = Vector3(float(cell.x), float(cell.y) + 0.5, float(cell.z)) - cs
+		_block_pivot.add_child(m)
 
 
 func _make_box(size: Vector3, mat: Material) -> MeshInstance3D:
@@ -473,6 +497,12 @@ func _make_box(size: Vector3, mat: Material) -> MeshInstance3D:
 
 
 func _process(delta: float) -> void:
+	# 通关闪光要先处理：它不能因为低画质档位（low_effects）或空目标格而永远不衰减，
+	# 否则方块会一直亮着（早期实现把它放在下面的 early-return 之后）。
+	if _win_flash > 0.0:
+		_win_flash = maxf(_win_flash - delta * 2.2, 0.0)
+		if _block_mat != null:
+			_block_mat.set_shader_parameter("flash", _win_flash)
 	# 目标格「呼吸」发光：既吸引注意，也让画面久看不呆板
 	if low_effects or goal_tiles.is_empty():
 		return
@@ -489,11 +519,33 @@ func _process(delta: float) -> void:
 		# 缓慢自转 + 轻微起伏：静止画面上的一点“活气”
 		r.rotation.y = _glow_t * 0.6
 		r.position.y = 0.012 + 0.02 * sin(_glow_t * 1.6)
-	# 通关闪光：方块本体不变色、不位移，只是亮一下（替代早期“变绿/抬高”的做法）
-	if _win_flash > 0.0:
-		_win_flash = maxf(_win_flash - delta * 2.2, 0.0)
-		if _block_mat != null:
-			_block_mat.set_shader_parameter("flash", _win_flash)
+
+func block_mesh_count() -> int:
+	# 方块渲染出来的单元数（挂在质心 pivot 下，不能直接数 block 的子节点）
+	return _block_meshes().size() + _rig_meshes().size()
+
+
+func block_mesh_centers() -> Array:
+	# 方块单元网格的**全局**坐标（供测试断言“渲染出来的位置”与状态一致）。
+	# 有了它才能抓住“缩放导致平移”这类只在画面上看得到的 bug：
+	# 状态是对的，但画出来的方块偏了，纯逻辑测试完全测不到。
+	var out: Array = []
+	for m in _block_meshes() + _rig_meshes():
+		out.append(m.global_position)
+	out.sort_custom(func(a, b) -> bool:
+		if a.x != b.x: return a.x < b.x
+		if a.z != b.z: return a.z < b.z
+		return a.y < b.y)
+	return out
+
+
+func _rig_meshes() -> Array:
+	# 正在翻滚/坠落时，单元网格临时挂在 rig 下
+	var out: Array = []
+	for c in get_children():
+		if str(c.name).ends_with("Rig"):
+			out.append_array(c.get_children())
+	return out
 
 
 func tile_count() -> int:
@@ -520,18 +572,25 @@ func play_spawn() -> void:
 		return
 	animating = true
 	block.position.y = SPAWN_HEIGHT
+	# 节奏：自由落体 → 触地挤压 → 极小的象征性回弹。
+	# 早期用的是 TRANS_BOUNCE，弹得像橡胶球；方块是刚体，下落应该是加速的（重力曲线），
+	# 触地后只弹一点点就停 —— 重量感来自“停得住”，而不是“弹得高”。
 	var tw := create_tween()
 	tw.tween_property(block, "position:y", 0.0, SPAWN_TIME) \
-		.set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_method(_squash_curve, 0.0, 1.0, SPAWN_TIME + 0.18)
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tw.tween_method(_squash_curve, 0.0, 1.0, 0.24)                       # 触地这一瞬间
+	tw.parallel().tween_property(block, "position:y", 0.10, 0.08).set_trans(Tween.TRANS_SINE)
+	tw.tween_property(block, "position:y", 0.0, 0.10).set_trans(Tween.TRANS_SINE)
 	tw.finished.connect(func() -> void:
-		block.scale = Vector3.ONE
+		if _block_pivot != null:
+			_block_pivot.scale = Vector3.ONE
 		animating = false)
 
 
 func play_land_squash() -> void:
-	# 每次落地的极小挤压：几乎零成本，但方块立刻“有重量”了
-	if block == null or not animate:
+	# 落地挤压。只用于「重生落地」这类真正的冲击时刻（见 _finish_move 的说明），
+	# 缩放作用在质心 pivot 上，所以方块不会因为缩放而平移。
+	if _block_pivot == null or not animate:
 		return
 	var tw := create_tween()
 	tw.tween_method(_squash_curve, 0.0, 1.0, 0.22)
@@ -539,10 +598,10 @@ func play_land_squash() -> void:
 
 func _squash_curve(u: float) -> void:
 	# u=0 开始、u=1 结束：先压扁再弹回（sin 一整个周期，前半压后半弹）
-	if block == null:
+	if _block_pivot == null:
 		return
 	var k: float = sin(u * PI) * LAND_SQUASH
-	block.scale = Vector3(1.0 + k * 0.5, 1.0 - k, 1.0 + k * 0.5)
+	_block_pivot.scale = Vector3(1.0 + k * 0.5, 1.0 - k, 1.0 + k * 0.5)
 
 
 func _free_children(node: Node) -> void:
