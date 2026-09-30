@@ -120,6 +120,11 @@ pi 里：`/test` `/serve` `/shot` `/games`
 - 浏览器对 `index.pck` 缓存极顽固 → 用 `gf-serve.sh`（`Cache-Control: no-store`）。
 - Godot 4 坑：`Vector3i` 无 `dot()`；`Array.sort()` 不能排 `Vector3i`（用 `sort_custom`）；
   版本头污染 stdout（用 `--no-header`）；默认字体无中文字形（已内置 Noto Sans SC）。
+- **WSL 的 drvfs 挂载下 `core.fileMode=false`**：git 无法记录执行位，所有文件都入库为 `100644`，
+  于 CI 里直接调用 `workflow/scripts/gf-test.sh` 会报 `Permission denied`（真实踩过）。
+  解决：`git update-index --chmod=+x workflow/scripts/*.sh` 显式标注。
+- **GitHub Pages 无法自定义响应头**：因此只能托管 Godot 的**单线程** Web 导出
+  （`variant/thread_support=false`）；另外**免费版组织**的 Pages 只能从**公开仓库**发布。
 
 ---
 

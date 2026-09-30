@@ -1,5 +1,7 @@
 # EasyGodot
 
+[![Deploy Web (GitHub Pages)](https://github.com/EasyIndie/EasyGodot/actions/workflows/pages.yml/badge.svg)](https://github.com/EasyIndie/EasyGodot/actions/workflows/pages.yml)
+
 > **AI + Godot 自动化游戏生产工作流**（Game Factory）+ 用它做出来的第一款游戏。
 
 核心想法：把「做游戏」拆成**可复现、可验证、可自动化**的流水线——
@@ -67,7 +69,6 @@ workflow/scripts/gf-pages.sh
 > Godot 二进制放在 `workflow/godot-bin/godot`（未入库，需自行下载对应版本）。
 
 ## 文档
-
 | 文档 | 内容 |
 |---|---|
 | [01 工作流总览](workflow/docs/01-workflow-overview.md) | 结构化输出协议、目录约定、运行器 |
@@ -77,6 +78,24 @@ workflow/scripts/gf-pages.sh
 | [05 生成与导出](workflow/docs/05-generation-and-export.md) | 关卡生成、导出管线、Steam 打包、GitHub Pages |
 | [06 新游戏手册](workflow/docs/06-new-game-playbook.md) | 用同一套平台做下一款游戏 |
 | [07 MVP 状态](workflow/docs/07-mvp-status.md) | MVP 对照表、待办、坑与交接说明 |
+
+## CI / 发布
+
+推送到 `main` 会自动触发 [`.github/workflows/pages.yml`](.github/workflows/pages.yml)：
+安装 Godot `4.7.2` + 导出模板（带缓存）→ 导入资源 → **跑全部测试与关卡质检** →
+导出 Web → 上传 Pages 产物。
+
+> **当前是私有仓库**，GitHub Pages 在**免费版组织**下只能从**公开仓库**发布，
+> 因此部署步骤会自动跳过（构建/测试照常跑）。**转为公开后会自动开始部署**，无需改任何配置。
+> 发布地址将是 <https://easyindie.github.io/EasyGodot/>。
+
+本地也可手动发布 / 预览：
+
+```bash
+workflow/scripts/gf-pages.sh games/puzzle-core              # 生成 dist/pages/
+python3 -m http.server 8080 --directory dist/pages          # 当 GitHub Pages 跑一遍
+workflow/scripts/gf-pages.sh games/puzzle-core --deploy     # 强推到 gh-pages 分支
+```
 
 ## 第三方资源
 
