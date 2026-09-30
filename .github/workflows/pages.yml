@@ -1,0 +1,100 @@
+# 自动构建 Web 版并发布到 GitHub Pages。
+#
+# 为什么能跑在 Pages 上（Pages 不能自定义响应头）：
+#   项目使用 Godot 的**单线程** Web 导出（export_presets.cfg: variant/thread_support=false），
+#   不需要 SharedArrayBuffer / COOP-COEP 跨源隔离，静态托管即可运行。
+#
+# 使用方式：
+#   仓库 Settings → Pages → Source 选择 "GitHub Actions"，然后推送 main 即可。
+name: Deploy Web (GitHub Pages)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "games/**"
+      - "workflow/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  # 与本地 workflow/godot-bin/godot 保持一致
+  GODOT_VERSION: "4.7.2"
+  PROJECT: games/puzzle-core
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 缓存 Godot 与导出模板
+        uses: actions/cache@v4
+        with:
+          path: |
+            workflow/godot-bin
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-linux
+
+      - name: 安装 Godot + 导出模板
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable"
+          mkdir -p workflow/godot-bin
+          if [ ! -x workflow/godot-bin/godot ]; then
+            curl -fsSL -o /tmp/godot.zip "$BASE/Godot_v${GODOT_VERSION}-stable_linux.x86_64.zip"
+            unzip -q -o /tmp/godot.zip -d /tmp/godot
+            mv "/tmp/godot/Godot_v${GODOT_VERSION}-stable_linux.x86_64" workflow/godot-bin/godot
+            chmod +x workflow/godot-bin/godot
+          fi
+          TPL="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.stable"
+          if [ ! -d "$TPL" ]; then
+            curl -fsSL -o /tmp/templates.tpz "$BASE/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+            mkdir -p "$(dirname "$TPL")" /tmp/tpl
+            unzip -q -o /tmp/templates.tpz -d /tmp/tpl
+            mv /tmp/tpl/templates "$TPL"
+          fi
+          workflow/godot-bin/godot --version
+
+      - name: 导入资源
+        # 首次导出前需要建立 .godot 导入缓存；个别非致命告警不影响导出
+        run: workflow/godot-bin/godot --headless --path "$PROJECT" --import || true
+
+      - name: 跑测试（关卡包门禁）
+        run: workflow/scripts/gf-test.sh "$PROJECT"
+
+      - name: 关卡质检
+        run: workflow/scripts/gf-run.sh -p "$PROJECT" res://tools/validate_levels.gd
+
+      - name: 导出 Web
+        run: workflow/scripts/gf-export.sh "$PROJECT" web
+
+      - name: 关闭 Jekyll
+        run: touch "$PROJECT/build/web/.nojekyll"
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ${{ env.PROJECT }}/build/web
+
+  deploy:
+    # 重要：GitHub Pages 在 **免费版组织** 下只能从 **公开仓库** 发布。
+    # 本仓库初始为私有（EasyIndie 为 free 计划）——所以先把部署跳过，
+    # 构建/测试照常跑；仓库转为公开后该 job 会自动生效，无需改任何东西。
+    if: ${{ !github.event.repository.private }}
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

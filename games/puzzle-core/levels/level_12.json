@@ -1,0 +1,38 @@
+{
+	"difficulty": "medium",
+	"goal": [
+		[
+			5,
+			5
+		]
+	],
+	"grid": {
+		"x": 6,
+		"z": 6
+	},
+	"holes": [
+		[
+			0,
+			3
+		],
+		[
+			0,
+			5
+		],
+		[
+			5,
+			2
+		]
+	],
+	"id": "level_12",
+	"optimal_moves": 5,
+	"start": {
+		"orientation": "standing",
+		"position": [
+			3,
+			0,
+			2
+		],
+		"shape": "cube"
+	}
+}

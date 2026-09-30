@@ -1,0 +1,38 @@
+{
+	"difficulty": "medium",
+	"goal": [
+		[
+			2,
+			0
+		]
+	],
+	"grid": {
+		"x": 6,
+		"z": 6
+	},
+	"holes": [
+		[
+			4,
+			5
+		],
+		[
+			5,
+			0
+		],
+		[
+			5,
+			3
+		]
+	],
+	"id": "level_06",
+	"optimal_moves": 5,
+	"start": {
+		"orientation": "standing",
+		"position": [
+			5,
+			0,
+			4
+		],
+		"shape": "domino"
+	}
+}

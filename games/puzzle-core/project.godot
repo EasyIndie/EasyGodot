@@ -1,0 +1,27 @@
+; Engine configuration file.
+; It's best edited using the editor UI and not directly,
+; since the parameters that go here are not all obvious.
+
+config_version=5
+
+[application]
+
+config/name="Puzzle Core"
+config/description="Game Factory 的第一个试点游戏：3D 几何滚动解谜。验证自动化游戏制作工作流。"
+config/version="0.1.0"
+run/main_scene="res://scenes/main.tscn"
+
+[display]
+
+window/size/viewport_width=1280
+window/size/viewport_height=720
+
+[gui]
+
+; 默认字体：Noto Sans SC（开源 OFL，含中文字形），避免中文显示为豆腐块
+theme/custom_font="res://fonts/NotoSansSC-Regular.otf"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"

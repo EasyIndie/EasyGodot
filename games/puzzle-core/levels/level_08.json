@@ -1,0 +1,38 @@
+{
+	"difficulty": "easy",
+	"goal": [
+		[
+			2,
+			4
+		]
+	],
+	"grid": {
+		"x": 5,
+		"z": 5
+	},
+	"holes": [
+		[
+			1,
+			2
+		],
+		[
+			4,
+			2
+		],
+		[
+			4,
+			4
+		]
+	],
+	"id": "level_08",
+	"optimal_moves": 3,
+	"start": {
+		"orientation": "standing",
+		"position": [
+			4,
+			0,
+			3
+		],
+		"shape": "cube"
+	}
+}

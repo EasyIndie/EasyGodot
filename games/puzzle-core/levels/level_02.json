@@ -1,0 +1,25 @@
+{
+	"difficulty": "easy",
+	"goal": [
+		[
+			4,
+			0
+		]
+	],
+	"grid": {
+		"x": 5,
+		"z": 5
+	},
+	"holes": [],
+	"id": "level_02",
+	"optimal_moves": 4,
+	"start": {
+		"orientation": "lying_z",
+		"position": [
+			4,
+			0,
+			2
+		],
+		"shape": "domino"
+	}
+}
