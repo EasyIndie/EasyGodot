@@ -570,6 +570,34 @@ func _test_ending() -> void:
 	check(not scene.hud_layer.visible, "庆祝层打开时 HUD 应让位")
 	check(not scene.touch_controls.is_shown(), "庆祝层打开时触屏控件应让位")
 
+	# **回归测试**：庆祝动画的判据必须是「这一局刚好补完最后一关」这个**跃迁**，
+	# 而不是「当前已全部通关」这个**持久状态**。
+	# 后者会让全部通关之后的每一次通关都被再恭喜一次（真实 bug：回头刷第 1 关也恭喜）。
+	scene.ending.close()
+	scene._do_load(0)
+	scene._run_moves = ["right"]
+	await scene._on_won()
+	check(not scene.ending.is_open(), "全部通关后再打通单关不应重复弹出庆祝动画")
+	check(scene.transitioning or scene.current_index != 0, "应走普通换关流程")
+	await create_timer(1.6).timeout
+
+	# 但庆祝动画不该是一次性的：选关界面提供「回顾通关」入口，
+	# 而且在**没有**全部通关时不可见（否则又是一次“随时都能被恭喜”）。
+	scene.level_select.open_with(scene.entries, scene.progress, 0)
+	check(scene.level_select.celebrate_button() != null, "选关界面应有「回顾通关」按钮")
+	check(scene.level_select.celebrate_button().visible, "全部通关后「回顾通关」应可见")
+	scene.level_select.celebrate_button().pressed.emit()
+	check(scene.ending.is_open(), "点「回顾通关」应重新打开庆祝层")
+	scene.ending.close()
+	await create_timer(0.2).timeout
+	var fresh2 = Progress.new(tmp + ".fresh")
+	fresh2.reset()
+	scene.level_select.open_with(scene.entries, fresh2, 0)
+	check(not scene.level_select.celebrate_button().visible, "未全部通关时「回顾通关」不应可见")
+	scene.level_select.close()
+	await create_timer(0.2).timeout
+	_remove_tmp(tmp + ".fresh")
+
 	# 出口 1：回到第 1 关（不清进度：记录是玩家的资产）
 	scene._on_ending_restart()
 	check(not scene.ending.is_open(), "点“再玩一次”应关闭庆祝层")

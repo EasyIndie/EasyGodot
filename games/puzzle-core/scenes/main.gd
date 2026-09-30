@@ -506,6 +506,7 @@ func _setup_level_select() -> void:
 	level_select.level_chosen.connect(_on_level_chosen)
 	level_select.closed.connect(_on_level_select_closed)
 	level_select.reset_requested.connect(_on_progress_reset)
+	level_select.celebration_requested.connect(_on_celebration_requested)
 
 
 func _setup_ending() -> void:
@@ -595,6 +596,13 @@ func _on_level_chosen(index: int) -> void:
 	_load_level(index, true)
 
 
+func _on_celebration_requested() -> void:
+	# 「回顾通关」：庆祝动画本身不该一次性的，但也不该强行弹给玩家 ——
+	# 想看就点，不想看就继续玩。
+	level_select.close()
+	_show_ending()
+
+
 func _on_progress_reset() -> void:
 	progress.reset()
 	level_select.open_with(entries, progress, current_index)
@@ -669,6 +677,11 @@ func _on_won() -> void:
 		_refresh_bands()
 		await _win_beat()
 		return
+	# 关键：庆祝动画的判据是「**这一局刚好补完了最后一关**」这个状态跃迁，
+	# 而不是「当前已全部通关」。后者是个持久状态 —— 全部通关之后再随便打通一关
+	# （比如回头刷第 1 关）都会被再恭喜一次（真实 bug）。
+	# 所以必须在 record_win **之前**快照。
+	var was_all_done: bool = _all_completed()
 	var res: Dictionary = progress.record_win(_level_key(current_index), _run_moves)
 	_update_hud()
 	win_label.text = _win_text(res)
@@ -678,8 +691,9 @@ func _on_won() -> void:
 	await _win_beat()
 	if transitioning or levels.is_empty():
 		return
-	# 全部通关：给一个明确的“旅程结束”，而不是默默滚回第 1 关（那看起来像 bug）
-	if _all_completed():
+	# 刚刚补完最后一关：给一个明确的“旅程结束”，而不是默默滚回第 1 关（那看起来像 bug）。
+	# 已经全部通关过的玩家再通关，就按普通换关处理（想再看一次可以去选关界面点「回顾通关」）。
+	if not was_all_done and _all_completed():
 		_show_ending()
 		return
 	_transition_to((current_index + 1) % levels.size())

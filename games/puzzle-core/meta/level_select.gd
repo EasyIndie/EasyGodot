@@ -16,6 +16,7 @@ const Shapes = preload("res://core/shapes.gd")
 signal level_chosen(index: int)
 signal closed
 signal reset_requested
+signal celebration_requested   # 「回顾通关」：全部通关后想再看一次庆祝动画
 
 const COLS := 5
 const CARD := Vector2(112.0, 86.0)
@@ -44,6 +45,7 @@ var _margin: MarginContainer = null
 var _hint: Label
 var _reset_btn: Button
 var _back_btn: Button
+var _celebrate_btn: Button
 var touch_mode: bool = false   # 由 main 设置：触屏下提示文案与按钮尺寸要适配
 var _confirm_reset: bool = false
 var _confirm_timer: float = 0.0
@@ -129,6 +131,19 @@ func _ready() -> void:
 	_back_btn.pressed.connect(func() -> void: close())
 	row.add_child(_back_btn)
 
+	# 「回顾通关」：只在全部通关后出现。庆祝动画不该是一次性的，
+	# 但也不该强行弹给玩家（那会变成“每次通关都被恭喜”）。
+	_celebrate_btn = Button.new()
+	_celebrate_btn.text = "回顾通关"
+	_celebrate_btn.visible = false
+	_celebrate_btn.focus_mode = Control.FOCUS_NONE
+	_celebrate_btn.add_theme_color_override("font_color", Color(0.82, 0.92, 1.0))
+	_celebrate_btn.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+	_celebrate_btn.add_theme_stylebox_override("normal", _sb(CARD_BG, EDGE, 1))
+	_celebrate_btn.add_theme_stylebox_override("hover", _sb(CARD_BG_HOVER, EDGE_HI, 1))
+	_celebrate_btn.pressed.connect(func() -> void: celebration_requested.emit())
+	row.add_child(_celebrate_btn)
+
 	_reset_btn = Button.new()
 	_reset_btn.text = "重置进度"
 	_reset_btn.flat = true
@@ -150,6 +165,10 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 	_keys.clear()
 	for e in entries:
 		_keys.append(str(e["key"]))
+	# 「回顾通关」只在全部通关后出现（庆祝动画不该是一次性的，但也不该强行弹给玩家）
+	if _celebrate_btn != null:
+		_celebrate_btn.visible = entries.size() > 0 and p_progress != null \
+			and p_progress.completed_count() >= entries.size()
 
 	for c in _cards:
 		_grid.remove_child(c)
@@ -308,6 +327,8 @@ func _apply_layout() -> void:
 	var btn_h: float = clampf(vp.y * 0.055, 34.0, 52.0)
 	_back_btn.custom_minimum_size = Vector2(btn_h * 3.4, btn_h)
 	_back_btn.add_theme_font_size_override("font_size", int(btn_h * 0.42))
+	_celebrate_btn.custom_minimum_size = Vector2(btn_h * 2.9, btn_h)
+	_celebrate_btn.add_theme_font_size_override("font_size", int(btn_h * 0.38))
 	_reset_btn.custom_minimum_size = Vector2(btn_h * 2.6, btn_h)
 	_reset_btn.add_theme_font_size_override("font_size", int(btn_h * 0.38))
 
@@ -315,6 +336,11 @@ func _apply_layout() -> void:
 func back_button() -> Button:
 	# 供测试验证「可点返回」确实接线（触屏没有 Esc，这是唯一出口）
 	return _back_btn
+
+
+func celebrate_button() -> Button:
+	# 供测试验证「回顾通关」的可见性与接线
+	return _celebrate_btn
 
 
 func hint_text() -> String:
