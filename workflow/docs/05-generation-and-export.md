@@ -208,6 +208,30 @@ workflow/scripts/gf-pages.sh games/puzzle-core
 python3 -m http.server 8080 --directory dist/pages   # → http://localhost:8080
 ```
 
+### Safari 兼容性（已踩过的坑）
+
+**现象**：Safari 打开后弹 `WebGL context lost, please reload the page`。
+
+**根因**：`html/canvas_resize_policy=2`（Adaptive）会让 WebGL 绘图缓冲 =
+`window.innerWidth × devicePixelRatio`。Retina 上就是 **3024×1800（约 540 万像素）**；
+Safari 的 WebGL 内存上限远紧于 Chrome，直接回收上下文。
+
+**修复**（三件）：
+
+1. `canvas_resize_policy` 改为 **1（Project）**——绘图缓冲固定为项目视口 **1280×720
+   （约 92 万像素，约 1/6）**；
+2. `html/head_include` 注入 CSS，把 canvas 按 16:9 **铺满窗口**（弥补固定分辨率的显示尺寸），
+   并把 Godot 的 `alert` 换成**带「重新加载」按钮的页面内浮层**；
+3. `project.godot` 显式关闭 `msaa_3d`/`msaa_2d`，避免多重采样帧缓冲再翻几倍内存。
+
+> 注意：`head_include` 里的 CSS 必须用 `!important`，才能盖过 Godot 每次 resize 写入的
+> 内联 `style.width/height`；但这不影响 Godot 的判断（它读的是内联属性值）与输入坐标映射
+> （它用 `getBoundingClientRect()`）。
+
+**诊断页**：`workflow/web/diag.html` 会被 `gf-export.sh` 自动附带到站点根目录，
+访问 `/diag.html` 即可看到：WebGL2/1 支持、真实 GPU renderer、`MAX_RENDERBUFFER_SIZE`、
+DPR 与窗口尺寸，并**真正分配**三种尺寸的帧缓冲看能否成功，以及可同时创建多少个 WebGL2 上下文。
+
 ### 注意事项
 
 - **仓库已转为公开**，Pages 使用 **workflow 构建源**（`build_type=workflow`）。

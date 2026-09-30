@@ -127,6 +127,9 @@ pi 里：`/test` `/serve` `/shot` `/games`
   （`variant/thread_support=false`）；另外**免费版组织**的 Pages 只能从**公开仓库**发布。
   首次启用 Pages 需管理员显式调用 `gh api -X POST repos/<o>/<r>/pages -f build_type=workflow`
   （工作流的 `GITHUB_TOKEN` 没有 admin，`configure-pages` 的 `enablement` 开不了）。
+- **Safari 的 WebGL 内存上限远紧于 Chrome**：`canvas_resize_policy=2`（绘图缓冲 = 窗口×DPR）
+  在 Retina 上会直接爆掉并报 `WebGL context lost`。已改为策略 1（固定 1280×720）+ 注入 CSS 铺满窗口；
+  诊断页 `/diag.html` 可现场测出真实 GPU 与帧缓冲容量。
 
 ---
 
