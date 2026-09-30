@@ -28,6 +28,8 @@ var _card: PanelContainer
 var _title: Label
 var _subtitle: Label
 var _stats: VBoxContainer
+var _hint: Label
+const HINT_TEXT := "再玩一遍会重新开始一轮：通关进度重新计\n本机记录与已解锁关卡保留"
 var _buttons: HBoxContainer
 var _confetti_root: Control
 var _insets: Dictionary = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
@@ -101,12 +103,21 @@ func _ready() -> void:
 	_buttons.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(_buttons)
 
-	var again := _make_button("再玩一次")
+	var again := _make_button("再玩一遍")
 	again.pressed.connect(func() -> void: restart_requested.emit())
 	_buttons.add_child(again)
 	var to_select := _make_button("回到选关")
 	to_select.pressed.connect(func() -> void: select_requested.emit())
 	_buttons.add_child(to_select)
+
+	# 按钮语义必须写出来：这会清本轮通关进度（但不动记录、不重锁关卡）。
+	# 「再玩一遍」不重置本轮进度的话，第二轮打完也不会再有庆祝 —— 玩家只能被恭喜一次。
+	_hint = Label.new()
+	_hint.text = HINT_TEXT
+	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_hint.autowrap_mode = TextServer.AUTOWRAP_OFF   # 文案自带换行，避免把词从中间劈开
+	_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	col.add_child(_hint)
 
 	get_viewport().size_changed.connect(_apply_layout)
 	_apply_layout()
@@ -139,6 +150,10 @@ func is_open() -> bool:
 func set_safe_insets(insets: Dictionary) -> void:
 	_insets = insets
 	_apply_layout()
+
+
+func hint_text() -> String:
+	return HINT_TEXT.replace("\n", "　")   # 断言/展示时用单行
 
 
 func title_text() -> String:

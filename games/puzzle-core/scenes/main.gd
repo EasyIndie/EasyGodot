@@ -19,6 +19,7 @@ var current_index: int = -1
 var progress = null             # 玩家进度（已完成 / 最佳步数 / 最佳回放）
 var level_select = null         # 选关界面
 var _run_moves: Array = []      # 本局已走的方向标签序列（用于 Replay）
+const REPLAY_BEAT := 0.34   # 回放每步之间的停顿（让回放看起来像“一个人在玩”）
 var _replaying: bool = false
 var replay_label: Label
 var hud_layer: CanvasLayer
@@ -519,8 +520,14 @@ func _setup_ending() -> void:
 
 
 func _on_ending_restart() -> void:
+	# 「再玩一遍」= 开始新一轮：**清本轮通关进度**，但
+	#   · 不动 best / replays / runs（玩家的记录是资产）
+	#   · 不动 _ever（已解锁关卡不重锁，否则等于惩罚玩家重玩）
+	# 不清本轮进度的话，第二轮打完不会再触发庆祝 —— 玩家一辈子只能被恭喜一次。
 	ending.close()
+	progress.reset_campaign()
 	_do_load(0)
+	_update_hud()
 	_refresh_bands()
 
 
@@ -619,9 +626,10 @@ func _play_replay() -> void:
 	_replaying = true
 	if touch_controls != null:
 		touch_controls.set_replay_playing(true)
-	_do_load(current_index)
+	# 回放开始也走「复位到起点」的入场动画，而不是瞬间把方块挪回去
+	_reset_to_start()
 	var moves: Array = rep["moves"]
-	await get_tree().process_frame
+	await _wait_for_anim()
 
 	for i in range(moves.size()):
 		if not _replaying:
@@ -629,31 +637,40 @@ func _play_replay() -> void:
 		replay_label.text = "回放　%d / %d" % [i + 1, moves.size()]
 		replay_label.visible = true
 		_refresh_bands()
-		game.try_move(Moves.direction_from_label(str(moves[i])))
-		while game.animating:
-			await get_tree().process_frame
+		# 与手动操作完全同源的动画（含等它演完）
+		var ok: bool = await _do_move_animated(Moves.direction_from_label(str(moves[i])))
+		if not ok:
+			break
 		if game.is_won() or game.is_lost():
 			break
-		await get_tree().create_timer(0.05).timeout
+		# 步与步之间的停顿：回放的动画必须和手动操作一样，但**节奏**必须像人。
+		# 早期只停 0.05s（每秒滚近 5 步），而翻滚缓动是 t*t（动作集中在最后 ~80ms），
+		# 连续播放在眼里就是「没有动画、一下一下地跳」。
+		await get_tree().create_timer(REPLAY_BEAT).timeout
 
 	replay_label.text = "回放结束"
 	await get_tree().create_timer(0.7).timeout
 	_replaying = false
 	if touch_controls != null:
 		touch_controls.set_replay_playing(false)
-	_do_load(current_index)   # 复位，方便玩家接着挑战
+	_reset_to_start()   # 复位，方便玩家接着挑战
+
+
+func _reset_to_start() -> void:
+	# 复位到本关起点的**唯一**实现：换关 + 入场下落动画（绝不瞬移）。
+	# R 重开、回放开始、回放结束都走它，「方块怎么重新出现」在所有场景下必须一致。
+	# （早期这里只在触屏下播入场动画，桌面直接瞬移 —— 同一个动作两套表现，正是要避免的）
+	# _do_load 与 play_spawn 在同一帧内完成，所以不会先闪一下再落下。
+	if game == null or levels.is_empty():
+		return
+	_do_load(current_index)
+	game.play_spawn()
 	_refresh_bands()
 
 
 func _restart() -> void:
 	# 重开也走动画：坠落之后如果“啪”一下复位，玩家会以为自己误触了什么。
-	# _do_load 与 play_spawn 在同一帧内完成，所以不会先闪一下再落下。
-	if game == null or levels.is_empty():
-		return
-	_do_load(current_index)
-	if touch_controls != null and touch_controls.is_shown():
-		game.play_spawn()
-	_refresh_bands()
+	_reset_to_start()
 
 
 func _next_level() -> void:
@@ -741,7 +758,10 @@ func _update_hud() -> void:
 	if _hud_narrow:
 		level_label.text = "第 %d 关　%d/%d" % [current_index + 1, done, levels.size()]
 	else:
-		level_label.text = "第 %d 关　·　已通关 %d / %d" % [current_index + 1, done, levels.size()]
+		# 重玩一轮时改成「本轮」：否则刚「再玩一遍」会看到已通关从 20 掉到 0，
+		# 像是进度被删了（其实只是本轮重新计，记录与解锁都还在）
+		var tag: String = "本轮" if progress.replay_round() else "已通关"
+		level_label.text = "第 %d 关　·　%s %d / %d" % [current_index + 1, tag, done, levels.size()]
 	progress_bar.max_value = float(levels.size())
 	# 进度条表示**整体通关进度**，而不是“当前第几关”：
 	# 跳到第 18 关时看到 18/20 会让人误以为快通关了，实际上只通了 3 关。
@@ -762,6 +782,23 @@ func _update_hud() -> void:
 	elif optimal > 0:
 		parts.append("参考 %d" % optimal)
 	best_label.text = "　·　".join(parts) if parts.size() > 0 else "　"
+
+
+func _wait_for_anim() -> void:
+	# 等待当前动画收尾的**唯一**原语。手动单步与回放共用：
+	# 任何一方自己写「不等动画就下一步」都会表现为瞬移/无动画。
+	while game != null and game.animating:
+		await get_tree().process_frame
+
+
+func _do_move_animated(d: Vector3i) -> bool:
+	# 回放用的「走一步并等它演完」——内部就是 _do_move + _wait_for_anim，
+	# 所以动画与手动操作**逐帧同源**，不存在“回放版动画”。
+	await _wait_for_anim()
+	if not _do_move(d):
+		return false
+	await _wait_for_anim()
+	return true
 
 
 func _do_move(d: Vector3i) -> bool:

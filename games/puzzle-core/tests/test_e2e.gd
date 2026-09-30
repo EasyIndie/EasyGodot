@@ -38,6 +38,7 @@ func _run() -> void:
 	await _test_scene()
 	await _test_level_select()
 	await _test_replay_playback()
+	await _test_replay_animation()
 	await _test_touch_controls()
 	await _test_move_animation_geometry()
 	await _test_respawn_animation()
@@ -422,6 +423,131 @@ func _test_replay_playback() -> void:
 	_remove_tmp(tmp)
 
 
+func _test_replay_animation() -> void:
+	# 真实反馈：“回放时方块移动没有动画，移动很快，不太自然”。
+	# 根因不是“回放有另一套动画”，而是回放**自己写了一套节奏**：
+	#   · 步与步之间只停 0.05s（每秒滚近 5 步）
+	#   · 翻滚缓动是 t*t（动作集中在最后 ~80ms）
+	# 于是连播在眼里就是“没有动画，一下一下地跳”。
+	# 现在回放与手动操作共用 _do_move + _wait_for_anim，步间给人类节奏（REPLAY_BEAT），
+	# 起止复位也改用带入场动画的 _reset_to_start（不再瞬移）。
+	# 这条测试必须跑在 animate=true 下 —— 原来的回放测试是同步驱动的，所以根本测不到动画。
+	var tmp := "user://test_e2e_replay_anim.json"
+	_remove_tmp(tmp)
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	check(scene.game.animate, "回放动画必须在开启动画的场景下验证")
+	scene.progress = Progress.new(tmp)
+
+	var key: String = str(scene.entries[0]["key"])
+	var sol: Dictionary = Solver.new(scene.game.board, scene.game.state).solve()
+	check(sol["solvable"], "第一关应可解")
+	var solution: Array = sol["solution"]
+	check(solution.size() >= 2, "本关解应至少 2 步（否则测不出步间节奏）")
+	scene.progress.record_win(key, solution)
+
+	# 逐帧采样：方块质心（含翻滚中的 rig）、是否在动画中、步数、真实时间
+	var samples: Array = []
+	var t0: int = Time.get_ticks_msec()
+	scene._play_replay()
+	while scene._replaying and Time.get_ticks_msec() - t0 < 9000:
+		await process_frame
+		var cs: Array = scene.game.block_mesh_centers()
+		var c := Vector3.INF
+		if not cs.is_empty():
+			c = Vector3.ZERO
+			for q in cs:
+				c += q
+			c /= float(cs.size())
+		samples.append({
+			"p": c,
+			"anim": scene.game.animating,
+			"moves": scene.game.move_count,
+			"t": Time.get_ticks_msec(),
+		})
+	check(samples.size() > 5, "应采到足够多的帧（实际 %d）" % samples.size())
+
+	# ① 回放起始必须用入场动画复位，而不是瞬间把方块挪回起点
+	var lifted := false
+	for s in samples:
+		if int(s["moves"]) == 0 and (s["p"] as Vector3).y > 1.0 and (s["p"] as Vector3).y < 900.0:
+			lifted = true
+	check(lifted, "回放开始应播入场下落动画，而不是瞬移复位")
+
+	# ② 每一步都必须真的在演动画：过程中必须出现“质心不在半整数格点上”的帧
+	#    （静止时质心恒为 k*0.5；只有真的在旋转才会离开格点）
+	var total_moves: int = solution.size()
+	var animated_moves: int = 0
+	for m in range(1, total_moves + 1):
+		var off_grid := false
+		var anim_frames: int = 0
+		for s in samples:
+			if int(s["moves"]) != m:
+				continue
+			if bool(s["anim"]):
+				anim_frames += 1
+			if _off_grid(s["p"]):
+				off_grid = true
+		if off_grid and anim_frames > 0:
+			animated_moves += 1
+	check(animated_moves == total_moves,
+		"回放每一步都要有翻滚动画（%d/%d 步有动画）" % [animated_moves, total_moves])
+
+	# ③ 步之间必须有可读的节奏：原地 0.05s 的间隔会让回放看起来像瞬移
+	var first_t: Dictionary = {}
+	for s in samples:
+		var m: int = int(s["moves"])
+		if m > 0 and not first_t.has(m):
+			first_t[m] = int(s["t"])
+	var min_gap: int = 1 << 30
+	for m in range(1, total_moves):
+		if first_t.has(m) and first_t.has(m + 1):
+			min_gap = mini(min_gap, int(first_t[m + 1]) - int(first_t[m]))
+	if total_moves >= 2:
+		check(min_gap >= 320,
+			"回放步间隔应接近「动画 + 人类停顿」（实测 %dms，旧实现只有 ~210ms）" % min_gap)
+
+	# ④ 回放中不允许瞬移：位移速度不能超过翻滚动画本身能达到的上限
+	#    （t*t 缓动末速 ~2/T，绕半径 ~1.12 的支点 → 约 14 格/秒；瞬移会远远超过）
+	var prev = null
+	var fast_frames: Array = []
+	for s in samples:
+		var p: Vector3 = s["p"]
+		if p == Vector3.INF:
+			prev = null
+			continue
+		if prev != null and int(s["moves"]) >= 1:
+			var dt: float = maxf(float(int(s["t"]) - int(prev["t"])), 0.001) / 1000.0
+			var dist: float = p.distance_to(prev["p"])
+			if dist > 14.0 * dt + 0.10:
+				fast_frames.append(dist)
+		prev = s
+	check(fast_frames.is_empty(),
+		"回放中不应出现瞬移帧（有 %d 帧位移超过翻滚动画的速度上限）" % fast_frames.size())
+
+	# ⑤ 收尾复位后应回到起点、步数归零（与手动重开一致）
+	var guard: int = 0
+	while scene.game.animating and guard < 600:
+		await process_frame
+		guard += 1
+	check(scene.game.move_count == 0, "回放结束后步数应归零")
+	check(not scene.game.is_won(), "回放结束后应复位（不处于通关态）")
+
+	await create_timer(0.4).timeout
+	scene.free()
+	_remove_tmp(tmp)
+
+
+func _off_grid(p: Vector3) -> bool:
+	# 静止时方块质心恒为 0.5 的整数倍；只有真的在旋转时才会离开格点。
+	for v in [p.x, p.y, p.z]:
+		if absf(v - roundf(v * 2.0) * 0.5) > 0.03:
+			return true
+	return false
+
+
 func _test_respawn_animation() -> void:
 	# 坠落后重开必须有动画：直接“啪”一下复位会让玩家以为自己误触了什么。
 	var tmp := "user://test_e2e_respawn.json"
@@ -598,11 +724,41 @@ func _test_ending() -> void:
 	await create_timer(0.2).timeout
 	_remove_tmp(tmp + ".fresh")
 
-	# 出口 1：回到第 1 关（不清进度：记录是玩家的资产）
+	# 出口 1：「再玩一遍」= 开始新一轮。
+	# 语义必须是「清本轮通关进度，但绝不动玩家的记录、也绝不重锁关卡」：
+	#   · 不清本轮进度 → 第二轮打完不会再有庆祝，玩家一辈子只能被恭喜一次
+	#   · 清掉记录/重锁关卡 → 等于惩罚玩家重玩
+	var bests: Array = []
+	for e in scene.entries:
+		bests.append(scene.progress.best_moves(str(e["key"])))
 	scene._on_ending_restart()
-	check(not scene.ending.is_open(), "点“再玩一次”应关闭庆祝层")
-	check(scene.current_index == 0, "应回到第 1 关")
-	check(scene.progress.completed_count() == scene.entries.size(), "再玩一次不应清空进度记录")
+	check(not scene.ending.is_open(), "点“再玩一遍”应关闭庆祝层")
+	check(scene.current_index == 0, "应从第 1 关重新开始")
+	check(scene.progress.completed_count() == 0, "再玩一遍应清空**本轮**通关进度")
+	check(scene.progress.ever_count() == scene.entries.size(), "历史通关记录应保留（记录是玩家的资产）")
+	var kept_best := true
+	for i in range(scene.entries.size()):
+		if scene.progress.best_moves(str(scene.entries[i]["key"])) != int(bests[i]):
+			kept_best = false
+	check(kept_best, "再玩一遍不应动最佳步数记录")
+	check(scene.progress.has_replay("level_01"), "再玩一遍不应删掉最佳回放")
+	# 关卡不能因为“再玩一遍”而被重新锁上（否则玩家想直接重玩后面某关就做不到了）
+	var all_unlocked := true
+	for i in range(scene.entries.size()):
+		if not scene.progress.is_unlocked(i, scene._level_keys()):
+			all_unlocked = false
+	check(all_unlocked, "再玩一遍后所有曾解锁的关卡应保持解锁")
+	check(scene.progress.replay_round(), "重玩一轮期间应能识别出“本轮”状态")
+	# 而且第二轮必须能再次迎来庆祝：重新补满 20/20 时应当触发
+	scene.ending.close()
+	await create_timer(0.2).timeout
+	var back_to_full := true
+	for e in scene.entries:
+		scene.progress.record_win(str(e["key"]), ["right"])
+		if not scene.progress.is_completed(str(e["key"])):
+			back_to_full = false
+	check(back_to_full and scene._all_completed(), "第二轮应能重新补满全部通关")
+	check(not scene.progress.replay_round(), "补满后不应还处于“本轮未完成”状态")
 
 	# 出口 2：回到选关
 	scene._show_ending()

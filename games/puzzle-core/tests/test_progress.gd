@@ -20,6 +20,7 @@ func _init() -> void:
 	_test_corrupt_save()
 	_test_replay_label_contract()
 	_test_reset()
+	_test_reset_campaign()
 	_remove(TMP)
 
 	var result: Dictionary = {
@@ -143,3 +144,59 @@ func _test_reset() -> void:
 	check(not p.has_replay("level_01"), "重置后应清空回放")
 	var q = Progress.new(TMP)
 	check(q.completed_count() == 0, "重置结果应已落盘")
+
+
+func _test_reset_campaign() -> void:
+	# 「再玩一遍」用的语义：**只清本轮通关进度**。
+	# 必须区分两套「通关」：
+	#   _completed → 本轮（进度展示 / 顺序解锁的“这一轮” / 庆祝判据）
+	#   _ever      → 曾经通关过（解锁依据 + 记录展示），只增不减
+	# 混用会踩两个坑：清不掉 → 第二轮打完不再有庆祝；全清 → 没收玩家记录并重锁关卡。
+	var p = Progress.new(TMP)
+	p.reset()
+	p.record_win("level_01", ["right", "down"])
+	p.record_win("level_02", ["left"])
+	check(p.is_completed("level_01") and p.has_ever_cleared("level_01"), "通关后两个口径都应为真")
+	check(not p.replay_round(), "进度与历史一致时不算“重玩一轮”")
+
+	p.reset_campaign()
+	check(p.completed_count() == 0, "再玩一遍应清空本轮进度")
+	check(p.ever_count() == 2, "再玩一遍应保留历史通关记录")
+	check(not p.is_completed("level_01"), "本轮口径应变为未通关")
+	check(p.has_ever_cleared("level_01"), "历史口径应仍为通关")
+	check(p.best_moves("level_01") == 2, "再玩一遍不应动最佳步数")
+	check(p.has_replay("level_01"), "再玩一遍不应删掉最佳回放")
+	check(p.runs("level_01").size() > 0, "再玩一遍不应清本机榜")
+	check(p.replay_round(), "本轮未补满而历史已满 → 应识别为“重玩一轮”状态")
+	# 解锁依据是历史：重玩时不能把已解锁的关卡重新锁上
+	var keys: Array = ["level_01", "level_02", "level_03"]
+	check(p.is_unlocked(1, keys), "再玩一遍后第 2 关应仍解锁（依据历史）")
+	check(p.is_unlocked(2, keys), "再玩一遍后第 3 关应仍解锁（依据历史）")
+
+	# 落盘后再读，两套口径都要能恢复
+	var q = Progress.new(TMP)
+	check(q.completed_count() == 0, "本轮进度应已落盘")
+	check(q.ever_count() == 2, "历史通关应已落盘")
+	check(q.replay_round(), "重玩状态应能从存档恢复")
+
+	# 补满本轮后回到“非重玩”状态
+	q.record_win("level_01", ["right"])
+	q.record_win("level_02", ["right"])
+	check(not q.replay_round(), "本轮补满后不应再是“重玩一轮”")
+
+	# 老存档兼容：没有 cleared_ever 字段时用 completed 回填
+	var legacy := TMP + ".legacy"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy))
+	var f := FileAccess.open(legacy, FileAccess.WRITE)
+	f.store_string('{"format":1,"completed":{"level_01":true},"best_moves":{"level_01":3},"replays":{},"runs":{}}')
+	f.close()
+	var r = Progress.new(legacy)
+	check(r.is_completed("level_01"), "老存档的本轮进度应保留")
+	check(r.has_ever_cleared("level_01"), "老存档应把 completed 回填为历史通关")
+	check(r.is_unlocked(1, ["level_01", "level_02"]), "老存档的解锁应正常")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy))
+
+	# 彻底重置：连历史与解锁一起清
+	q.reset()
+	check(q.ever_count() == 0, "完全重置应清空历史通关")
+	check(not q.is_unlocked(1, ["level_01", "level_02"]), "完全重置后第 2 关应重新锁定")

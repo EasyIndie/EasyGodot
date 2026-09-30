@@ -83,9 +83,11 @@ func _test_glyph_coverage() -> void:
 
 	var chars: Dictionary = {}
 	# 只扫描**会渲染成文字**的来源，必须与 workflow/scripts/gf-font-subset.sh 的
-	# UI_SOURCES 一致：core/solver/tools/tests 是 headless 层，不渲染文字，
-	# 其注释里的符号（如 ∘）也未必在 Noto Sans SC 里。
-	for d in ["res://scenes", "res://meta"]:
+	# UI_SOURCES 一致。solver/tools/tests 是 headless 层，不会渲染文字，
+	# 其字符串里的符号（如 ∘、✓）也未必在 Noto Sans SC 里，强行要求会误报。
+	# core/ **必须**包含：它不画界面，但会提供显示用文案（如 shapes.gd 的形状名）。
+	# 真实踩过：把形状名从 meta/ 搬进 core/ 后扫描范围没跟上 → 卡片上变豆腐块。
+	for d in ["res://scenes", "res://meta", "res://core"]:
 		var dir := DirAccess.open(d)
 		if dir == null:
 			continue

@@ -4,6 +4,13 @@
 # 不依赖 Board / State / 场景，可在 headless 下单测。
 # 存档路径可注入 → 测试写临时文件，不污染 user://progress.json。
 #
+# 两套「通关」概念必须分开（这是一个真实设计坑）：
+#   _completed → **本轮**通关进度：顺序解锁、进度展示、通关庆祝的判据
+#   _ever      → **曾经**通关过：只用于解锁与「最佳记录」展示，只增不减
+# 分开的原因：「再玩一遍」要能把本轮进度清零（否则第二轮打完也没有庆祝，
+# 玩家永远只能被恭喜一次），但绝不能因此没收玩家的记录，也不能把已解锁的关卡重新锁上
+# —— 那等于惩罚玩家重玩。
+#
 # 这一层同时是 Replay 与「排行榜基础」的数据底座：
 #   - 每关保留一份**最佳步数的回放**（moves 为方向标签序列，可重放）
 #   - completed / best_moves 用于顺序解锁与进度展示
@@ -14,7 +21,8 @@ const FORMAT := 1
 const MAX_RUNS := 5   # 每关保留的本机榜条数
 
 var path: String = DEFAULT_PATH
-var _completed: Dictionary = {}   # {key: true}
+var _completed: Dictionary = {}   # {key: true} 本轮通关进度
+var _ever: Dictionary = {}        # {key: true} 曾经通关（解锁 + 记录展示，只增不减）
 var _best: Dictionary = {}        # {key: int}  最佳步数
 var _replays: Dictionary = {}     # {key: {moves: Array[String], move_count: int, at: int}}
 var _runs: Dictionary = {}        # {key: [{moves: int, at: int}, ...]} 按步数升序，本机榜
@@ -29,6 +37,7 @@ func _init(p_path: String = DEFAULT_PATH) -> void:
 
 func _read() -> void:
 	_completed.clear()
+	_ever.clear()
 	_best.clear()
 	_replays.clear()
 	_runs.clear()
@@ -47,6 +56,8 @@ func _read() -> void:
 		return
 	for k in d.get("completed", {}):
 		_completed[str(k)] = true
+	for k in d.get("cleared_ever", {}):
+		_ever[str(k)] = true
 	for k in d.get("best_moves", {}):
 		_best[str(k)] = int(d["best_moves"][k])
 	for k in d.get("replays", {}):
@@ -66,6 +77,10 @@ func _read() -> void:
 				if r is Dictionary:
 					rs.append({"moves": int(r.get("moves", 0)), "at": int(r.get("at", 0))})
 			_runs[str(k)] = rs
+	# 兼容旧存档：老格式没有 cleared_ever → 用 completed 回填（老存档的 completed 就是历史）
+	if _ever.is_empty():
+		for k in _completed.keys():
+			_ever[k] = true
 	# 兼容旧存档：只有最佳步数、没有本机榜时补一条，保证榜单不为空
 	for k in _best.keys():
 		if not _runs.has(k):
@@ -82,6 +97,7 @@ func save() -> bool:
 	f.store_string(JSON.stringify({
 		"format": FORMAT,
 		"completed": _completed,
+		"cleared_ever": _ever,
 		"best_moves": _best,
 		"replays": _replays,
 		"runs": _runs,
@@ -93,7 +109,22 @@ func save() -> bool:
 # ── 查询 ───────────────────────────────────────────────
 
 func is_completed(key: String) -> bool:
+	# 本轮是否已通关
 	return _completed.has(key)
+
+
+func has_ever_cleared(key: String) -> bool:
+	# 历史上是否通关过（记录展示 / 解锁依据）
+	return _ever.has(key)
+
+
+func ever_count() -> int:
+	return _ever.size()
+
+
+func replay_round() -> bool:
+	# 是否处在「重玩一轮」中：已经通关过全部，但本轮进度还没补满
+	return _ever.size() > _completed.size()
 
 
 func completed_count() -> int:
@@ -124,7 +155,9 @@ func is_unlocked(index: int, keys: Array) -> bool:
 		return true
 	if index >= keys.size():
 		return false
-	return _completed.has(str(keys[index - 1]))
+	# 解锁依据是「曾经通关」：一旦解锁就永远解锁，
+	# 「再玩一遍」清空本轮进度时不能把关卡重新锁上（那等于惩罚玩家重玩）
+	return _ever.has(str(keys[index - 1]))
 
 
 # ── 写入 ───────────────────────────────────────────────
@@ -136,6 +169,7 @@ func record_win(key: String, moves: Array) -> Dictionary:
 	var now: int = moves.size()
 	var at: int = int(Time.get_unix_time_from_system())
 	_completed[key] = true
+	_ever[key] = true
 
 	# 本机榜：每局都进榜，按步数升序，只保留前 MAX_RUNS 条
 	var rs: Array = (_runs.get(key, []) as Array).duplicate()
@@ -157,8 +191,17 @@ func record_win(key: String, moves: Array) -> Dictionary:
 	return {"first_clear": first, "improved": improved, "prev_best": prev, "move_count": now}
 
 
-func reset() -> void:
+func reset_campaign() -> void:
+	# 「再玩一遍」：只清本轮通关进度。
+	# 保留 best / replays / runs（玩家的记录是资产）与 _ever（已解锁关卡不重锁）。
 	_completed.clear()
+	save()
+
+
+func reset() -> void:
+	# 「重置进度」：彻底清空（记录 + 解锁 + 本轮进度）
+	_completed.clear()
+	_ever.clear()
 	_best.clear()
 	_replays.clear()
 	_runs.clear()

@@ -5,7 +5,8 @@
 #
 # 卡片状态：
 #   锁定   → 前序关卡未通关（disabled，键盘导航会自动跳过）
-#   已通关 → 显示玩家最佳步数
+#   本轮已通关 → 显示玩家最佳步数（亮）
+#   历史通关过 → 同样显示最佳步数（暗）：记录还在，只是本轮没重打
 #   可挑战 → 显示参考（最优）步数
 extends CanvasLayer
 
@@ -29,6 +30,7 @@ const FG := Color(0.88, 0.91, 0.98)
 const FG_DIM := Color(0.44, 0.47, 0.57)
 const FG_DONE := Color(0.42, 0.88, 0.60)
 const FG_OPT := Color(0.62, 0.70, 0.86)
+const FG_EVER := Color(0.34, 0.58, 0.44)   # 历史通关过但本轮未通关（暗一档）
 
 var _progress = null          # meta/progress.gd 实例
 var _entries: Array = []      # 关卡元数据（open_with 传入）
@@ -182,6 +184,10 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 		_cards.append(card)
 
 	_subtitle.text = Leaderboard.summary_text(Leaderboard.summary(_progress, entries))
+	if _progress.replay_round():
+		# 重玩一轮时汇总里的「已通关」是历史记录口径（记录不清），必须额外标出本轮进度，
+		# 否则玩家会以为进度被清掉了（其实只清本轮）
+		_subtitle.text += "　·　本轮 %d / %d" % [_progress.completed_count(), entries.size()]
 	_apply_layout()
 	_show_detail(_current)
 	_set_confirm(false)
@@ -219,6 +225,7 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 	var key: String = str(entry["key"])
 	var unlocked: bool = _progress.is_unlocked(index, _keys)
 	var done: bool = _progress.is_completed(key)
+	var ever: bool = _progress.has_ever_cleared(key)
 	var best: int = _progress.best_moves(key)
 	var optimal: int = int(entry.get("optimal", -1))
 
@@ -252,12 +259,8 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 	col.add_child(num)
 
 	var shape := Label.new()
-	if str(entry.get("mechanic", "")) == "ice":
-		shape.text = "冰块"
-	elif str(entry.get("shape", "")) == "cube":
-		shape.text = "方块"
-	else:
-		shape.text = "骨牌"
+	# 形状名统一走注册表，这里不再有任何 if id == ...（加形状只需改 core/shapes.gd）
+	shape.text = Shapes.display_name(str(entry.get("shape", "domino")))
 	shape.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shape.add_theme_font_size_override("font_size", 11)
 	shape.add_theme_color_override("font_color", FG_DIM)
@@ -273,6 +276,11 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 	elif done:
 		status.text = "最佳 %d" % best
 		status.add_theme_color_override("font_color", FG_DONE)
+	elif ever:
+		# 历史通关过、本轮还没重打：记录照旧展示，但颜色暗一档表示“本轮未通关”。
+		# （「再玩一遍」清的是本轮进度而不是记录，卡片上必须看得出来）
+		status.text = "最佳 %d" % best
+		status.add_theme_color_override("font_color", FG_EVER)
 	elif optimal > 0:
 		status.text = "参考 %d" % optimal
 		status.add_theme_color_override("font_color", FG_OPT)
