@@ -10,6 +10,14 @@
 
 ---
 
+## ▶ 在线试玩
+
+**<https://easyindie.github.io/EasyGodot/>**
+
+Godot Web 单线程导出，打开即玩（无需安装）。方向键 / WASD 移动 · `R` 重开 · `L` 选关 · `V` 看最佳回放。
+
+---
+
 ## 目录结构
 
 ```
@@ -85,9 +93,9 @@ workflow/scripts/gf-pages.sh
 安装 Godot `4.7.2` + 导出模板（带缓存）→ 导入资源 → **跑全部测试与关卡质检** →
 导出 Web → 上传 Pages 产物。
 
-> **当前是私有仓库**，GitHub Pages 在**免费版组织**下只能从**公开仓库**发布，
-> 因此部署步骤会自动跳过（构建/测试照常跑）。**转为公开后会自动开始部署**，无需改任何配置。
-> 发布地址将是 <https://easyindie.github.io/EasyGodot/>。
+> **已上线**：仓库已转为公开，Pages 使用 **workflow 构建源**，
+> 部署地址 <https://easyindie.github.io/EasyGodot/>。
+> 推送 `main` 后约 1 分钟自动更新（构建 → 测试 → 质检 → 导出 → 部署）。
 
 本地也可手动发布 / 预览：
 

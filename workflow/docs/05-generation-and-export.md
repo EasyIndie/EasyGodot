@@ -210,8 +210,15 @@ python3 -m http.server 8080 --directory dist/pages   # → http://localhost:8080
 
 ### 注意事项
 
-- **仓库目前还不是 git 仓库**：需先 `git init` + `git remote add origin <url>`。
-  `workflow/godot-bin/`（Godot 二进制，>100MB）、`games/*/build/`、`dist/` 已在 `.gitignore` 中。
+- **仓库已转为公开**，Pages 使用 **workflow 构建源**（`build_type=workflow`）。
+  免费版组织的 Pages 只能从公开仓库发布——这就是当初必须先转公开的原因。
+- 首次启用 Pages 需要一次显式操作（工作流的 `GITHUB_TOKEN` 没有 admin 权限，
+  `configure-pages` 的 `enablement` 开不了）：
+  ```bash
+  gh api -X POST repos/<owner>/<repo>/pages -f build_type=workflow
+  ```
+  之后 `actions/configure-pages` 只负责读取配置，不需要 admin。
+- `workflow/godot-bin/`（Godot 二进制，>100MB）、`games/*/build/`、`dist/` 已在 `.gitignore` 中。
 - 若日后**开启多线程导出**（`variant/thread_support=true`），GitHub Pages 会因缺少
   COOP/COEP 而无法运行 —— 那时需换 Cloudflare Pages / Netlify（它们可自定义响应头）。
 - `gf-serve.sh` 仅供**本地开发**（它额外发了 no-store，且是多线程服务器），与 Pages 无关。

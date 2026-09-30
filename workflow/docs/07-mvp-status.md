@@ -125,6 +125,8 @@ pi 里：`/test` `/serve` `/shot` `/games`
   解决：`git update-index --chmod=+x workflow/scripts/*.sh` 显式标注。
 - **GitHub Pages 无法自定义响应头**：因此只能托管 Godot 的**单线程** Web 导出
   （`variant/thread_support=false`）；另外**免费版组织**的 Pages 只能从**公开仓库**发布。
+  首次启用 Pages 需管理员显式调用 `gh api -X POST repos/<o>/<r>/pages -f build_type=workflow`
+  （工作流的 `GITHUB_TOKEN` 没有 admin，`configure-pages` 的 `enablement` 开不了）。
 
 ---
 
