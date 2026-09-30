@@ -8,6 +8,7 @@ const Moves = preload("res://core/moves.gd")
 const Loader = preload("res://core/level_loader.gd")
 const Fixtures = preload("res://tests/fixtures.gd")
 const Progress = preload("res://meta/progress.gd")
+const TouchControls = preload("res://meta/touch_controls.gd")
 
 var checks: int = 0
 var failures: int = 0
@@ -27,6 +28,7 @@ func _run() -> void:
 	await _test_scene()
 	await _test_level_select()
 	await _test_replay_playback()
+	await _test_touch_controls()
 	_report_and_quit()
 
 
@@ -218,6 +220,53 @@ func _test_scene() -> void:
 func _remove_tmp(path: String) -> void:
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+func _test_touch_controls() -> void:
+	# 触屏操作层：滑动方向映射、按钮联动、不与选关/过渡打架
+	# 1) 静态的滑动→方向映射（与键盘一致：右=+x 左=-x 下=+z 上=-z）
+	check(TouchControls.swipe_dir(Vector2(80, 0)) == Vector3i(1, 0, 0), "右滑应映射 +x")
+	check(TouchControls.swipe_dir(Vector2(-80, 0)) == Vector3i(-1, 0, 0), "左滑应映射 -x")
+	check(TouchControls.swipe_dir(Vector2(0, 80)) == Vector3i(0, 0, 1), "下滑应映射 +z")
+	check(TouchControls.swipe_dir(Vector2(0, -80)) == Vector3i(0, 0, -1), "上滑应映射 -z")
+	check(TouchControls.swipe_dir(Vector2(10, 4)) == Vector3i.ZERO, "过短位移不应算滑动")
+	check(TouchControls.swipe_dir(Vector2(70, 30)) == Vector3i(1, 0, 0), "斜向滑动应取主导轴（x）")
+	check(TouchControls.swipe_dir(Vector2(25, 70)) == Vector3i(0, 0, 1), "斜向滑动应取主导轴（y）")
+
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.add_child(scene)
+	await process_frame
+	check(scene.touch_controls != null, "主场景应创建触屏操作层")
+
+	# 2) 默认（headless 无触屏）不显示；强制打开后可见
+	scene._touch_active = false
+	scene._apply_touch_visibility()
+	check(not scene.touch_controls.is_shown(), "默认不应显示触屏控件")
+	scene._touch_active = true
+	scene._apply_touch_visibility()
+	check(scene.touch_controls.is_shown(), "?touch=1 / 触屏设备应显示控件")
+	check(scene.touch_controls.bottom_inset() > 0.0, "应报告底部占位高度（供提示文案避让）")
+
+	# 3) 方向信号应真的驱动方块
+	var before: int = scene.game.move_count
+	scene._on_touch_direction(Vector3i(1, 0, 0))
+	check(scene.game.move_count == before + 1, "触屏方向应驱动一次移动")
+
+	# 4) 选关界面打开时，触屏方向不得穿透到棋盘
+	scene._open_level_select()
+	check(scene.level_select.is_open(), "选关界面应已打开")
+	var mid: int = scene.game.move_count
+	scene._on_touch_direction(Vector3i(1, 0, 0))
+	check(scene.game.move_count == mid, "选关打开时触屏方向应被拦下")
+	scene.level_select.close()
+
+	# 5) 选关打开时应连带隐藏触屏控件，关闭后恢复
+	scene._open_level_select()
+	check(not scene.touch_controls.is_shown(), "选关打开时应隐藏触屏控件")
+	scene.level_select.close()
+	check(scene.touch_controls.is_shown(), "选关关闭后应恢复触屏控件")
+
+	scene.free()
 
 
 func _test_level_select() -> void:

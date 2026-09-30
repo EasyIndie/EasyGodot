@@ -5,6 +5,8 @@ const Game = preload("res://scenes/game.gd")
 const Moves = preload("res://core/moves.gd")
 const Progress = preload("res://meta/progress.gd")
 const LevelSelect = preload("res://meta/level_select.gd")
+const TouchControls = preload("res://meta/touch_controls.gd")
+const UiLayout = preload("res://meta/ui_layout.gd")
 
 var game: Node3D = null
 var cam: Camera3D = null
@@ -20,6 +22,10 @@ var replay_label: Label
 var hud_layer: CanvasLayer
 # ?lite=1：低端 GPU / 排障开关——关阴影与渐变幕布、停逐帧材质更新
 var lite_mode: bool = false
+# 触屏操作层（仅在触屏设备显示；可用 ?touch=1 / ?touch=0 强制，桌面可按 T 切换）
+var touch_controls = null
+var _touch_active: bool = false
+var _query_string: String = ""
 
 # HUD 节点
 var level_label: Label
@@ -41,6 +47,8 @@ var transitioning: bool = false
 
 
 func _ready() -> void:
+	if OS.has_feature("web"):
+		_query_string = str(JavaScriptBridge.eval("window.location.search", true))
 	lite_mode = _query_flag("lite")
 	_setup_camera()
 	_setup_light()
@@ -48,6 +56,7 @@ func _ready() -> void:
 	_setup_backdrop()
 	_setup_hud()
 	_setup_transition()
+	_setup_touch_controls()
 	progress = Progress.new()
 	levels = _scan_levels()
 	_setup_level_select()
@@ -59,14 +68,68 @@ func _ready() -> void:
 	game.won.connect(_on_won)
 	game.fell.connect(_on_fell)
 	_load_level(0, false)
+	_refresh_help()
 
 
 func _query_flag(name: String) -> bool:
-	# 读取 URL 查询参数（仅 Web 有效），用于低端 GPU / 排障开关（如 ?lite=1）
-	if not OS.has_feature("web"):
+	# 读取 URL 查询参数（仅 Web 有效），用于低端 GPU / 触屏等开关
+	return _query_string.contains(name + "=1")
+
+
+func _setup_touch_controls() -> void:
+	touch_controls = TouchControls.new()
+	touch_controls.name = "TouchControls"
+	add_child(touch_controls)
+	touch_controls.direction.connect(_on_touch_direction)
+	touch_controls.restart_pressed.connect(_restart)
+	touch_controls.select_pressed.connect(_open_level_select)
+	touch_controls.replay_pressed.connect(_play_replay)
+	_touch_active = _touch_wanted()
+	_apply_touch_visibility()
+
+
+func _touch_wanted() -> bool:
+	# 触屏设备才显示操作层；?touch=1 / ?touch=0 可强制（便于在桌面调试触屏 UI）
+	if _query_string.contains("touch=1"):
+		return true
+	if _query_string.contains("touch=0"):
 		return false
-	var q: String = str(JavaScriptBridge.eval("window.location.search", true))
-	return q.contains(name + "=1")
+	return DisplayServer.is_touchscreen_available()
+
+
+func _apply_touch_visibility() -> void:
+	if touch_controls == null:
+		return
+	var hud_hidden: bool = hud_layer != null and not hud_layer.visible
+	touch_controls.set_shown(_touch_active and not hud_hidden)
+
+
+func _on_touch_direction(d: Vector3i) -> void:
+	# 触屏滑动/方向键与键盘走同一条路径，但要避开选关、过渡、回放
+	if transitioning or _replaying:
+		return
+	if level_select != null and level_select.is_open():
+		return
+	_do_move(d)
+
+
+func _refresh_help() -> void:
+	if help_label == null:
+		return
+	if touch_controls != null and touch_controls.is_shown():
+		# 触屏时控件占据底部，提示改放**顶部**（HUD 下方），
+		# 否则横屏会直接压在棋盘上
+		help_label.text = "滑动屏幕，或点按左下方向键移动"
+		help_label.anchor_top = 0.0
+		help_label.anchor_bottom = 0.0
+		help_label.offset_top = 98.0
+		help_label.offset_bottom = 124.0
+	else:
+		help_label.text = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     ·     掉出棋盘或落入空洞会坠落"
+		help_label.anchor_top = 1.0
+		help_label.anchor_bottom = 1.0
+		help_label.offset_top = -36.0
+		help_label.offset_bottom = -12.0
 
 
 func _scan_levels() -> Array:
@@ -245,6 +308,7 @@ func _open_level_select() -> void:
 func _hide_hud(hidden: bool) -> void:
 	if hud_layer != null:
 		hud_layer.visible = not hidden
+	_apply_touch_visibility()
 
 
 func _on_level_select_closed() -> void:
@@ -408,6 +472,13 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_V:
 				_play_replay()
 				return
+			KEY_T:
+				# 桌面调试：手动开关触屏操作层
+				if touch_controls != null:
+					_touch_active = not touch_controls.is_shown()
+					_apply_touch_visibility()
+					_refresh_help()
+				return
 			KEY_N:
 				_next_level()
 				return
@@ -435,8 +506,13 @@ func _frame_camera() -> void:
 	var cz: float = float(game.board.grid_z) / 2.0
 	var s: float = float(max(game.board.grid_x, game.board.grid_z))
 	var az: float = deg_to_rad(45.0)
-	var horiz: float = s * 1.35
-	cam.position = Vector3(cx + horiz * sin(az), s * 1.35, cz + horiz * cos(az))
+	# 距离按视口宽高比自适应：手机竖屏时横向可视范围更窄，
+	# 必须把相机往后拉，否则棋盘左右两侧会被切掉（见 ui_layout.camera_distance）
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var aspect: float = vp.x / maxf(vp.y, 1.0)
+	var dist: float = UiLayout.camera_distance(s, aspect, cam.fov)
+	var dir := Vector3(sin(az), 1.0, cos(az)).normalized()
+	cam.position = Vector3(cx, 0.0, cz) + dir * dist
 	cam.look_at(Vector3(cx, 0.0, cz))
 
 

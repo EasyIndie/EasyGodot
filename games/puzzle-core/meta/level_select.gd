@@ -10,6 +10,7 @@
 extends CanvasLayer
 
 const Leaderboard = preload("res://meta/leaderboard.gd")
+const UiLayout = preload("res://meta/ui_layout.gd")
 
 signal level_chosen(index: int)
 signal closed
@@ -31,7 +32,9 @@ var _progress = null          # meta/progress.gd 实例
 var _entries: Array = []      # 关卡元数据（open_with 传入）
 var _keys: Array = []         # 关卡 key（与 entries 顺序一致）
 var _cards: Array = []
+var _card_parts: Array = []   # 与 _cards 同序：{num, shape, status} 三个标签（供缩放字号）
 var _grid: GridContainer
+var _title: Label
 var _subtitle: Label
 var _detail: Label
 var _hint: Label
@@ -67,6 +70,7 @@ func _ready() -> void:
 	title.add_theme_font_size_override("font_size", 30)
 	title.add_theme_color_override("font_color", Color(0.94, 0.96, 1.0))
 	box.add_child(title)
+	_title = title
 
 	_subtitle = Label.new()
 	_subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -103,6 +107,8 @@ func _ready() -> void:
 	_reset_btn.pressed.connect(_on_reset_pressed)
 	box.add_child(_reset_btn)
 
+	get_viewport().size_changed.connect(_apply_layout)
+
 
 # ── 对外 ───────────────────────────────────────────────
 
@@ -117,6 +123,7 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 		_grid.remove_child(c)
 		c.free()   # 立即释放：避免连续 open_with 时旧卡片残留一帧
 	_cards.clear()
+	_card_parts.clear()
 	_entries = entries
 	for i in range(entries.size()):
 		var card := _make_card(entries[i], i)
@@ -124,6 +131,7 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 		_cards.append(card)
 
 	_subtitle.text = Leaderboard.summary_text(Leaderboard.summary(_progress, entries))
+	_apply_layout()
 	_show_detail(_current)
 	_set_confirm(false)
 	visible = true
@@ -217,7 +225,27 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 		status.add_theme_color_override("font_color", FG_OPT)
 	status.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(status)
+	_card_parts.append({"num": num, "shape": shape, "status": status})
 	return b
+
+
+func _apply_layout() -> void:
+	# 按视口自适应：列数随宽度降级、卡片与字号按可用宽度反算（窄屏/竖屏不溢出）
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var g: Dictionary = UiLayout.level_grid(vp, maxi(_entries.size(), 1))
+	_grid.columns = int(g["columns"])
+	var card: Vector2 = g["card"]
+	for i in range(_cards.size()):
+		_cards[i].custom_minimum_size = card
+		var p: Dictionary = _card_parts[i]
+		p["num"].add_theme_font_size_override("font_size", int(card.x * 0.205))
+		p["shape"].add_theme_font_size_override("font_size", int(card.x * 0.100))
+		p["status"].add_theme_font_size_override("font_size", int(card.x * 0.108))
+	var k: float = clampf(vp.x / 1280.0, 0.62, 1.0)
+	_title.add_theme_font_size_override("font_size", int(30.0 * k))
+	_subtitle.add_theme_font_size_override("font_size", int(16.0 * k))
+	_detail.add_theme_font_size_override("font_size", int(14.0 * k))
+	_hint.add_theme_font_size_override("font_size", int(14.0 * k))
 
 
 func _show_detail(index: int) -> void:

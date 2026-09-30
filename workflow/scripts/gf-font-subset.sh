@@ -122,6 +122,13 @@ TMP_OUT="$FONT.tmp"
 "$NODE_BIN" "$(native "$DRIVER")" "$(native "$FULL")" "$(native "$TMP_OUT")" "$(native "$GLYPHS")"
 mv "$TMP_OUT" "$FONT"
 
+# 关键：Godot 运行时读的是 .godot/imported/ 里的导入缓存，而 headless 运行
+# 不会自动重新导入。不刷新就会出现「字体明明换了、游戏里还是旧字形」。
+GODOT="$SCRIPT_DIR/../godot-bin/godot"
+if [ -x "$GODOT" ]; then
+	"$GODOT" --headless --no-header --path "$PROJECT" --import >/dev/null 2>&1 || true
+fi
+
 echo "=== 完成 ==="
 echo "    字体: $FONT ($(du -h "$FONT" | cut -f1))"
 echo "    校验: workflow/scripts/gf-run.sh -p $PROJECT res://tests/test_font.gd"

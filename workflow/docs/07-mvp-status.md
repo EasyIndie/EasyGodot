@@ -125,6 +125,12 @@ pi 里：`/test` `/serve` `/shot` `/games`
   **16.4MB → 100KB**，pck **14.5MB → 149KB**，首屏下载 -26%。
   `tests/test_font.gd` 是守卫，只扫描**字符串字面量**（注释里的 `∘`、`——` 永远不会被渲染，
   不该逼字体包含），并断言字体 < 1MB；两边扫描规则（`STRING_RE` / `UI_SOURCES`）必须一致。
+- **headless 运行不会自动重新导入资源**：改了字体/纹理后 `.godot/imported/` 里仍是旧的，
+  测试与游戏读到的也是旧资源（表现为「字体明明换了、字形还是旧的」）。
+  `gf-font-subset.sh` 已在末尾自动跑一次 `--import`；手工改资源后也要记得。
+- **手机竖屏必须自己拉远相机**：`Camera3D.fov` 默认是竖向 FOV，
+  竖屏时横向可视范围更窄，用桌面调好的距离会把棋盘左右切掉。
+  见 `meta/ui_layout.gd::camera_distance()`（比例 ≥ 1 时旧行为不变）。
 - **WSL 的 drvfs 挂载下 `core.fileMode=false`**：git 无法记录执行位，所有文件都入库为 `100644`，
   于 CI 里直接调用 `workflow/scripts/gf-test.sh` 会报 `Permission denied`（真实踩过）。
   解决：`git update-index --chmod=+x workflow/scripts/*.sh` 显式标注。
