@@ -262,8 +262,8 @@ workflow/scripts/gf-run.sh -p games/puzzle-core res://tests/test_font.gd   # 校
 | | 前 | 后 |
 |---|---|---|
 | 字体文件 | 16.4 MB | **100 KB**（165×） |
-| `index.pck` | 14.5 MB | **307 KB** |
-| 首屏下载（pck+wasm+js） | ~54 MB | **~39.8 MB**（-26%） |
+| `index.pck` | 14.5 MB | **149 KB** |
+| 首屏下载（pck+wasm+js） | ~54 MB | **~39.7 MB**（-26%） |
 | 运行时字体内存 | ~16 MB | **~0.1 MB** |
 
 **做法**：从会渲染 UI 文本的源码（`scenes/`、`meta/`、`*.tscn`、`project.godot`）里提取**字符串字面量**

@@ -122,7 +122,7 @@ pi 里：`/test` `/serve` `/shot` `/games`
   版本头污染 stdout（用 `--no-header`）；默认字体无中文字形（已内置 Noto Sans SC **子集**）。
 - **内置字体必须是子集**：完整 Noto Sans SC 16.4MB，而 UI 只用几百字（Web 要下载它，
   移动端还要常驻内存）。`workflow/scripts/gf-font-subset.sh` 按项目实际用字裁剪：
-  **16.4MB → 100KB**，pck **14.5MB → 307KB**，首屏下载 -26%。
+  **16.4MB → 100KB**，pck **14.5MB → 149KB**，首屏下载 -26%。
   `tests/test_font.gd` 是守卫，只扫描**字符串字面量**（注释里的 `∘`、`——` 永远不会被渲染，
   不该逼字体包含），并断言字体 < 1MB；两边扫描规则（`STRING_RE` / `UI_SOURCES`）必须一致。
 - **WSL 的 drvfs 挂载下 `core.fileMode=false`**：git 无法记录执行位，所有文件都入库为 `100644`，
