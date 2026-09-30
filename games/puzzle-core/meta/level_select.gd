@@ -39,6 +39,8 @@ var _subtitle: Label
 var _detail: Label
 var _hint: Label
 var _reset_btn: Button
+var _back_btn: Button
+var touch_mode: bool = false   # 由 main 设置：触屏下提示文案与按钮尺寸要适配
 var _confirm_reset: bool = false
 var _confirm_timer: float = 0.0
 var _current: int = 0
@@ -91,21 +93,39 @@ func _ready() -> void:
 	box.add_child(_detail)
 
 	_hint = Label.new()
-	_hint.text = "← → ↑ ↓ 选择     Enter / 点击 开始     Esc 返回"
 	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hint.add_theme_font_size_override("font_size", 14)
 	_hint.add_theme_color_override("font_color", FG_DIM)
 	box.add_child(_hint)
 
+	# 底部按钮行。
+	# **必须有可点的「返回」**：桌面靠 Esc，但触屏没有键盘，
+	# 之前只能进不能出，整个选关页面就变成了死胡同。
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
+	box.add_child(row)
+
+	_back_btn = Button.new()
+	_back_btn.text = "返回游戏"
+	_back_btn.focus_mode = Control.FOCUS_NONE
+	_back_btn.add_theme_color_override("font_color", FG)
+	_back_btn.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+	_back_btn.add_theme_stylebox_override("normal", _sb(CARD_BG_HOVER, EDGE_HI, 1))
+	_back_btn.add_theme_stylebox_override("hover", _sb(CARD_BG_HOVER, EDGE_HI, 2))
+	_back_btn.add_theme_stylebox_override("pressed", _sb(CARD_BG_HOVER, EDGE_HI, 2))
+	_back_btn.pressed.connect(func() -> void: close())
+	row.add_child(_back_btn)
+
 	_reset_btn = Button.new()
 	_reset_btn.text = "重置进度"
 	_reset_btn.flat = true
 	_reset_btn.focus_mode = Control.FOCUS_NONE
-	_reset_btn.add_theme_font_size_override("font_size", 13)
+	_reset_btn.add_theme_font_size_override("font_size", 14)
 	_reset_btn.add_theme_color_override("font_color", FG_DIM)
 	_reset_btn.add_theme_color_override("font_hover_color", Color(1.0, 0.55, 0.55))
 	_reset_btn.pressed.connect(_on_reset_pressed)
-	box.add_child(_reset_btn)
+	row.add_child(_reset_btn)
 
 	get_viewport().size_changed.connect(_apply_layout)
 
@@ -201,7 +221,12 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 	col.add_child(num)
 
 	var shape := Label.new()
-	shape.text = "方块" if str(entry.get("shape", "")) == "cube" else "骨牌"
+	if str(entry.get("mechanic", "")) == "ice":
+		shape.text = "冰块"
+	elif str(entry.get("shape", "")) == "cube":
+		shape.text = "方块"
+	else:
+		shape.text = "骨牌"
 	shape.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shape.add_theme_font_size_override("font_size", 11)
 	shape.add_theme_color_override("font_color", FG_DIM)
@@ -246,6 +271,26 @@ func _apply_layout() -> void:
 	_subtitle.add_theme_font_size_override("font_size", int(16.0 * k))
 	_detail.add_theme_font_size_override("font_size", int(14.0 * k))
 	_hint.add_theme_font_size_override("font_size", int(14.0 * k))
+	# 提示文案：触屏上没有键盘，不能写 Esc / Enter
+	if touch_mode:
+		_hint.text = "点按卡片开始　·　底部「返回游戏」关闭"
+	else:
+		_hint.text = "← → ↑ ↓ 选择     Enter / 点击 开始     Esc 返回"
+	# 按钮：触屏要够大好点（高度按视口自适应，并留出最小可点面积）
+	var btn_h: float = clampf(vp.y * 0.055, 34.0, 52.0)
+	_back_btn.custom_minimum_size = Vector2(btn_h * 3.4, btn_h)
+	_back_btn.add_theme_font_size_override("font_size", int(btn_h * 0.42))
+	_reset_btn.custom_minimum_size = Vector2(btn_h * 2.6, btn_h)
+	_reset_btn.add_theme_font_size_override("font_size", int(btn_h * 0.38))
+
+
+func back_button() -> Button:
+	# 供测试验证「可点返回」确实接线（触屏没有 Esc，这是唯一出口）
+	return _back_btn
+
+
+func hint_text() -> String:
+	return _hint.text
 
 
 func _show_detail(index: int) -> void:

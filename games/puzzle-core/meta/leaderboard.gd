@@ -63,7 +63,12 @@ static func detail_text(entries: Array, progress, index: int) -> String:
 		return ""
 	var e: Dictionary = entries[index]
 	var parts: Array = ["第 %02d 关" % (index + 1)]
-	parts.append("方块" if str(e.get("shape", "")) == "cube" else "骨牌")
+	if str(e.get("mechanic", "")) == "ice":
+		parts.append("冰块")
+	elif str(e.get("shape", "")) == "cube":
+		parts.append("方块")
+	else:
+		parts.append("骨牌")
 	var optimal: int = int(e.get("optimal", -1))
 	if optimal > 0:
 		parts.append("参考 %d 步" % optimal)

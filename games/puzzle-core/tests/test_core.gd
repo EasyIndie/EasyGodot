@@ -23,6 +23,7 @@ func _init() -> void:
 	_test_domino_rolls()
 	_test_cube_rolls()
 	_test_cube_orientation_descriptors()
+	_test_ice_mechanic()
 	_test_reversibility()
 	_test_board_and_goal()
 	_test_level_loader()
@@ -158,6 +159,62 @@ func _test_cube_orientation_descriptors() -> void:
 	var d = Shapes.get_shape("domino")
 	check(Shapes.resolve_orientation(d, "standing") != Shapes.resolve_orientation(d, "lying_x"), "domino 的竖立与横躺应是不同方向")
 	check(Shapes.resolve_orientation(d, "nonsense") == -1, "domino 的非法描述符仍应报错")
+
+
+func _test_ice_mechanic() -> void:
+	# 冰面机制：一次移动 = 连续翻滚到「再滚一格就踩空」为止。
+	# 设计取舍：不引入累积状态 → 规范键/求解器/状态空间都不用变。
+	var data: Dictionary = {
+		"id": "ice", "grid": {"x": 5, "z": 5}, "mechanic": "ice",
+		"holes": [[2, 2], [2, 4]], "goal": [[4, 0]],
+		"start": {"shape": "cube", "orientation": "standing", "position": [0, 0, 4]},
+	}
+	var lv: Dictionary = Loader.load_dict(data)
+	check(not lv.has("error"), "冰面 cube 关卡应能加载: " + str(lv))
+	if lv.has("error"):
+		return
+	var b = lv["board"]
+	var st = lv["start"]
+	check(str(st.mechanism.get("move", "")) == "ice", "机关应写进状态")
+
+	# 向 +x 滑：(1,4) 实心、(2,4) 是洞 → 只能滑 1 格就停
+	var p1: Array = Core.slide_path(b, st, Vector3i(1, 0, 0))
+	check(p1.size() == 1, "碰到洞前应只滑 1 格，got=%d" % p1.size())
+	# 向 -x 滑：x=-1 越界 → 第一步就踩空
+	check(Core.slide_path(b, st, Vector3i(-1, 0, 0)).is_empty(), "第一步越界应无可滑路径")
+	# 向 +z 滑：(0,4)→(0,0) 一路实心，应滑满 4 格
+	check(Core.slide_path(b, st, Vector3i(0, 0, -1)).size() == 4, "无阻挡方向应一路滑到底")
+
+	# apply_move_on 应直接落到滑动终点（一步到位，而不是只走一格）
+	var ns = Core.apply_move_on(b, st, Vector3i(0, 0, -1))
+	check(ns != null, "滑动应合法")
+	if ns != null:
+		_eq_cells(ns.world_cells(), _cells([[0, 0, 0]]), "冰面移动应滑到终点而不是只走一格")
+	# 第一步就踩空 → null（与边缘掉落语义一致）
+	check(Core.apply_move_on(b, st, Vector3i(-1, 0, 0)) == null, "第一步踩空应返回 null")
+
+	# 同盘去掉机关 → 一次只走一格（对照）
+	var plain: Dictionary = data.duplicate(true)
+	plain.erase("mechanic")
+	var lv2: Dictionary = Loader.load_dict(plain)
+	var ns2 = Core.apply_move_on(lv2["board"], lv2["start"], Vector3i(0, 0, -1))
+	check(ns2 != null and ns2.position == Vector3i(0, 0, 3), "无冰面时一次只走一格")
+
+	# 冰面要求单格形状
+	var dom: Dictionary = data.duplicate(true)
+	dom["start"] = {"shape": "domino", "orientation": "standing", "position": [0, 0, 4]}
+	check(str(Loader.load_dict(dom).get("error", "")) == "mechanic_needs_single_cell",
+		"冰面 + 多格形状应被拒绝")
+	# 未知机关应报错，而不是静默忽略
+	var unk: Dictionary = data.duplicate(true)
+	unk["mechanic"] = "nope"
+	check(str(Loader.load_dict(unk).get("error", "")) == "unknown_mechanic", "未知机关应报错")
+
+	# 机关状态必须参与规范键：否则位置相同、机关不同的状态会被错误合并
+	var cu = Shapes.get_shape("cube")
+	var s_a = State.new(cu, 0, Vector3i(0, 0, 0), {})
+	var s_b = State.new(cu, 0, Vector3i(0, 0, 0), {"move": "ice"})
+	check(s_a.canonical_key() != s_b.canonical_key(), "机关状态必须参与规范键去重")
 
 
 func _test_reversibility() -> void:

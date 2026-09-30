@@ -72,25 +72,50 @@ func load_dict(lv: Dictionary) -> bool:
 	return true
 
 
+func is_sliding() -> bool:
+	return Core.is_sliding(state)
+
+
+func _plan_move(d: Vector3i) -> Array:
+	# 逐格步骤；最后一步 supported=false 表示坠落。
+	# 冰面关卡会一直滚到「再滚一格就踩空」为止（与求解器同一套规则）。
+	var steps: Array = []
+	var cur = state
+	var ice: bool = Core.is_sliding(cur)
+	var limit: int = board.grid_x * board.grid_z + 4
+	for _i in range(limit):
+		var r: Dictionary = Moves.roll_delta(cur.shape, cur.orientation, d)
+		var next_pos: Vector3i = cur.position + r["delta"]
+		var to_cells: Array = cur.cells_at(r["orientation"], next_pos)
+		var ok: bool = board.supports(to_cells)
+		# roll_delta 的 pivot 用「单元中心在整数格」的坐标；渲染把方块抬高 0.5 贴地，
+		# 所以此处要 +0.5，支点才是方块真正的底棱。
+		steps.append({
+			"orientation": r["orientation"],
+			"position": next_pos,
+			"pivot": Vector3(cur.position) + r["pivot"] + Vector3(0.0, 0.5, 0.0),
+			"from_cells": cur.world_cells(),
+			"to_cells": to_cells,
+			"supported": ok,
+		})
+		if not ok or not ice:
+			break
+		cur = State.new(cur.shape, r["orientation"], next_pos, cur.mechanism)
+	return steps
+
+
 func try_move(d: Vector3i) -> bool:
 	if won_flag or lost_flag or animating:
 		return false
-	var from_state = state
-	var r: Dictionary = Moves.roll_delta(from_state.shape, from_state.orientation, d)
-	var new_ori: int = r["orientation"]
-	var new_pos: Vector3i = from_state.position + r["delta"]
-	var from_cells: Array = from_state.world_cells()
-	var to_cells: Array = from_state.cells_at(new_ori, new_pos)
+	var steps: Array = _plan_move(d)
+	var last: Dictionary = steps[steps.size() - 1]
 	# 落点是否全部实心；否则坠落（棋盘边缘与黑洞都是「失去支撑」，效果一致）
-	var supported: bool = board.supports(to_cells)
-	# roll_delta 的 pivot 用「单元中心在整数格」的坐标；渲染把方块抬高 0.5 贴地，
-	# 所以此处要 +0.5，支点才是方块真正的底棱。
-	var pivot_world: Vector3 = Vector3(from_state.position) + r["pivot"] + Vector3(0.0, 0.5, 0.0)
+	var supported: bool = bool(last["supported"])
 	if supported:
-		state = State.new(from_state.shape, new_ori, new_pos, from_state.mechanism)
+		state = State.new(state.shape, int(last["orientation"]), last["position"], state.mechanism)
 		move_count += 1
 	if animate:
-		_start_roll(d, pivot_world, from_cells, to_cells, supported)
+		_start_rolls(d, steps)
 	else:
 		_finish_move(supported)
 	return true
@@ -121,33 +146,47 @@ func event_to_dir(event: InputEvent) -> Vector3i:
 
 # ── 动画 ────────────────────────────────────────────────
 
-func _start_roll(d: Vector3i, pivot_world: Vector3, from_cells: Array, to_cells: Array, supported: bool) -> void:
+func _start_rolls(d: Vector3i, steps: Array) -> void:
+	# 支持**连续多段翻滚**（冰面滑动）：把所有段串在同一个 tween 上。
+	# 对「当前变换 (q, pos)」绕支点 P 施加旋转 R：
+	#   new_q = R · q，  new_pos = P + R · (pos − P)
+	# 单段时 base_q = 单位四元数、base_pos = 起始质心，退化成原来的一次翻滚。
 	animating = true
-	var cs: Vector3 = _cells_center(from_cells)  # 当前质心
-	var ct: Vector3 = _cells_center(to_cells)    # 翻滚后的质心
-	# 用「刚体」节点承载方块：绕支点 P 旋转时整体位置 = P + R(θ)·(C_s - P)
-	# 这样它在翻滚阶段绕前下边转，坠落阶段可以改为绕自身质心转。
+	var supported: bool = bool(steps[steps.size() - 1]["supported"])
+	var cs: Vector3 = _cells_center(steps[0]["from_cells"])
+	# 用「刚体」节点承载方块：单元位置改为相对质心，便于后续绕支点/质心旋转。
 	var rig := Node3D.new()
 	rig.name = "RollRig"
 	add_child(rig)
 	for cube in block.get_children().duplicate():
 		block.remove_child(cube)
 		rig.add_child(cube)
-		cube.position -= cs  # 改为「相对质心」，便于后续绕质心旋转
+		cube.position -= cs
 
 	var m: Array = Moves.roll_rotation(d)
-	var q_roll: Quaternion = Basis(Vector3(m[0]), Vector3(m[1]), Vector3(m[2])).get_rotation_quaternion()
+	var q_step: Quaternion = Basis(Vector3(m[0]), Vector3(m[1]), Vector3(m[2])).get_rotation_quaternion()
+	# 段时长：单段用 ROLL_TIME；滑多格时每段短一些，避免长距离滑动拖沓
+	var seg: float = ROLL_TIME if steps.size() == 1 else maxf(ROLL_TIME * 0.62, 0.5 * ROLL_TIME)
 
+	var cur_q: Quaternion = Quaternion.IDENTITY
+	var cur_pos: Vector3 = cs
 	_tween = create_tween()
-	# 1) 绕「前下边」翻滚 90°（角速度递增，模拟重力力矩）
-	_tween.tween_method(
-		func(t: float) -> void:
-			var q: Quaternion = Quaternion.IDENTITY.slerp(q_roll, t * t)
-			rig.quaternion = q
-			rig.position = pivot_world + q * (cs - pivot_world),
-		0.0, 1.0, ROLL_TIME)
+	for st in steps:
+		var base_q: Quaternion = cur_q
+		var base_pos: Vector3 = cur_pos
+		var pv: Vector3 = st["pivot"]
+		# 绕「前下边」翻滚 90°（角速度递增，模拟重力力矩）
+		_tween.tween_method(
+			func(t: float) -> void:
+				var q: Quaternion = Quaternion.IDENTITY.slerp(q_step, t * t)
+				rig.quaternion = q * base_q
+				rig.position = pv + q * (base_pos - pv),
+			0.0, 1.0, seg)
+		cur_q = q_step * base_q
+		cur_pos = pv + q_step * (base_pos - pv)
 	if not supported:
-		_append_fall(rig, ct, to_cells, q_roll, q_roll.get_axis(), FALL_EXTRA_SPIN)
+		var last: Dictionary = steps[steps.size() - 1]
+		_append_fall(rig, _cells_center(last["to_cells"]), last["to_cells"], cur_q, cur_q.get_axis(), FALL_EXTRA_SPIN)
 	_tween.finished.connect(_on_anim_finished.bind(rig, supported))
 
 

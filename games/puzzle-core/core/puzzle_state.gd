@@ -31,11 +31,17 @@ func world_cells() -> Array:
 
 
 func canonical_key() -> String:
-	# 用于求解器去重的规范键：按世界单元排序后的字符串
+	# 用于求解器去重的规范键：世界单元 + **机关状态**（按 key 排序，保证确定性）。
+	# 机关状态必须入键：否则两个“方块位置相同、机关状态不同”的状态会被错误合并。
 	var cs: Array = Util.sort_cells(world_cells())
 	var s := ""
 	for c in cs:
 		s += "%d,%d,%d;" % [c.x, c.y, c.z]
+	if not mechanism.is_empty():
+		var keys: Array = mechanism.keys()
+		keys.sort()
+		for k in keys:
+			s += "|%s=%s" % [str(k), str(mechanism[k])]
 	return s
 
 

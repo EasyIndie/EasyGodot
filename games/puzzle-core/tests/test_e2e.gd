@@ -303,6 +303,13 @@ func _test_touch_controls() -> void:
 	scene.level_select.close()
 	check(scene.touch_controls.is_shown(), "选关关闭后应恢复触屏控件")
 
+	# 6) 触屏下的按钮语义：回放中再点「回放」应停止；点「重开」也应停止回放
+	scene.progress.record_win(str(scene.entries[0]["key"]), ["right"])
+	scene._play_replay()
+	check(scene._replaying, "应进入回放状态")
+	scene._on_touch_replay()
+	check(not scene._replaying, "回放中再点「回放」应停止（触屏没有 Esc）")
+
 	scene.free()
 
 
@@ -340,6 +347,20 @@ func _test_level_select() -> void:
 	check(scene.level_select.card_enabled(1), "通关前一关后第 2 关应解锁")
 	check(not scene.level_select.card_enabled(2), "第 3 关仍应锁定")
 	scene.level_select.close()
+
+	# 移动端没有 Esc —— 选关必须能点「返回」退出，否则进来就出不去
+	check(scene.level_select.back_button() != null, "选关界面应有可点的返回按钮")
+	scene.level_select.touch_mode = true
+	scene.level_select.open_with(scene.entries, fresh, 0)
+	check(scene.level_select.is_open(), "应已打开")
+	scene.level_select.back_button().pressed.emit()
+	check(not scene.level_select.is_open(), "点「返回」应关闭选关界面（触屏唯一出口）")
+	# 触屏下提示文案不得再提键盘按键
+	scene.level_select.open_with(scene.entries, fresh, 0)
+	check(not scene.level_select.hint_text().contains("Esc"),
+		"触屏提示不应写 Esc（got='%s'）" % scene.level_select.hint_text())
+	scene.level_select.close()
+	scene.level_select.touch_mode = false
 
 	scene.free()
 	_remove_tmp(tmp)

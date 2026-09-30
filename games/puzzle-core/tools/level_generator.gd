@@ -9,7 +9,8 @@ var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 
 func generate(seed: int, grid_x: int, grid_z: int, hole_density: float,
-		difficulty: String, count: int, min_moves: int, shape_id: String = "domino") -> Dictionary:
+		difficulty: String, count: int, min_moves: int, shape_id: String = "domino",
+		mechanic: String = "") -> Dictionary:
 	rng.seed = seed
 	var levels: Array = []
 	var details: Array = []
@@ -22,7 +23,7 @@ func generate(seed: int, grid_x: int, grid_z: int, hole_density: float,
 
 	while levels.size() < count and stats["attempts"] < max_attempts:
 		stats["attempts"] += 1
-		var data: Dictionary = _generate_one(grid_x, grid_z, hole_density, shape_id)
+		var data: Dictionary = _generate_one(grid_x, grid_z, hole_density, shape_id, mechanic)
 		data["id"] = "gen_%d_%03d" % [seed, seq]
 
 		var r: Dictionary = Validate.validate_dict(data)
@@ -51,7 +52,8 @@ func generate(seed: int, grid_x: int, grid_z: int, hole_density: float,
 	return {"levels": levels, "details": details, "stats": stats}
 
 
-func _generate_one(grid_x: int, grid_z: int, hole_density: float, shape_id: String = "domino") -> Dictionary:
+func _generate_one(grid_x: int, grid_z: int, hole_density: float, shape_id: String = "domino",
+		mechanic: String = "") -> Dictionary:
 	var holes_v: Array = []  # Array[Vector2i]
 	for x in range(grid_x):
 		for z in range(grid_z):
@@ -70,12 +72,15 @@ func _generate_one(grid_x: int, grid_z: int, hole_density: float, shape_id: Stri
 	for h in holes_v:
 		holes_arr.append([h.x, h.y])
 
-	return {
+	var out: Dictionary = {
 		"grid": {"x": grid_x, "z": grid_z},
 		"holes": holes_arr,
 		"goal": [[goal_v.x, goal_v.y]],
 		"start": {"shape": shape_id, "orientation": orientation, "position": [start_v.x, 0, start_v.y]},
 	}
+	if mechanic != "":
+		out["mechanic"] = mechanic
+	return out
 
 
 func _random_solid(grid_x: int, grid_z: int, holes: Array, exclude: Array) -> Vector2i:

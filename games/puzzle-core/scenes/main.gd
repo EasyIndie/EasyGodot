@@ -83,9 +83,9 @@ func _setup_touch_controls() -> void:
 	touch_controls.name = "TouchControls"
 	add_child(touch_controls)
 	touch_controls.direction.connect(_on_touch_direction)
-	touch_controls.restart_pressed.connect(_restart)
+	touch_controls.restart_pressed.connect(_on_touch_restart)
 	touch_controls.select_pressed.connect(_open_level_select)
-	touch_controls.replay_pressed.connect(_play_replay)
+	touch_controls.replay_pressed.connect(_on_touch_replay)
 	_touch_active = _touch_wanted()
 	_apply_touch_visibility()
 
@@ -136,10 +136,15 @@ func _refresh_bands() -> void:
 		l.anchor_bottom = l.anchor_top
 		l.offset_top = 98.0 if at_top else -52.0
 		l.offset_bottom = 142.0 if at_top else -8.0
+	var base: String
 	if touch_on:
-		help_label.text = "滑动屏幕，或点按左下方向键移动"
+		base = "滑动屏幕，或点按左下方向键移动"
 	else:
-		help_label.text = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     ·     掉出棋盘或落入空洞会坠落"
+		base = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     ·     掉出棋盘或落入空洞会坠落"
+	# 机关关卡要告知规则，否则玩家不知道“为什么停不下来”
+	if game != null and game.is_sliding():
+		base += "　·　冰面：方块会一路滑到不能再走"
+	help_label.text = base
 	# 同一条带只显示优先级最高的一条
 	help_label.visible = not (win_label.visible or fail_label.visible or replay_label.visible)
 
@@ -174,6 +179,7 @@ func _entry_for(index: int, path: String) -> Dictionary:
 		e["shape"] = str(d.get("start", {}).get("shape", "domino"))
 		e["optimal"] = int(d.get("optimal_moves", -1))
 		e["difficulty"] = str(d.get("difficulty", ""))
+		e["mechanic"] = str(d.get("mechanic", ""))
 	return e
 
 
@@ -315,7 +321,24 @@ func _open_level_select() -> void:
 	if levels.is_empty():
 		return
 	_hide_hud(true)
+	level_select.touch_mode = _touch_active
 	level_select.open_with(entries, progress, current_index)
+
+
+func _on_touch_restart() -> void:
+	# 回放中按钮语义变为「停止回放」——回放可能是被误触的，必须能中止
+	if _replaying:
+		_replaying = false
+		return
+	_restart()
+
+
+func _on_touch_replay() -> void:
+	# 触屏没有 Esc：同一个按钮兼作「播放 / 停止」
+	if _replaying:
+		_replaying = false
+		return
+	_play_replay()
 
 
 func _hide_hud(hidden: bool) -> void:
@@ -354,7 +377,7 @@ func _play_replay() -> void:
 	for i in range(moves.size()):
 		if not _replaying:
 			break
-		replay_label.text = "回放　%d / %d　（Esc 退出）" % [i + 1, moves.size()]
+		replay_label.text = "回放　%d / %d" % [i + 1, moves.size()]
 		replay_label.visible = true
 		_refresh_bands()
 		game.try_move(Moves.direction_from_label(str(moves[i])))
@@ -447,6 +470,8 @@ func _update_hud() -> void:
 	if levels.is_empty():
 		return
 	level_label.text = "第 %d 关　·　%d / %d" % [current_index + 1, current_index + 1, levels.size()]
+	if game.is_sliding():
+		level_label.text += "　·　冰面"
 	progress_bar.max_value = float(levels.size())
 	progress_bar.value = float(current_index + 1)
 	moves_label.text = "步数  %d" % game.move_count
