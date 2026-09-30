@@ -261,20 +261,22 @@ workflow/scripts/gf-run.sh -p games/puzzle-core res://tests/test_font.gd   # 校
 
 | | 前 | 后 |
 |---|---|---|
-| 字体文件 | 16.4 MB | **272 KB**（60×） |
-| `index.pck` | 14.5 MB | **320 KB** |
+| 字体文件 | 16.4 MB | **100 KB**（165×） |
+| `index.pck` | 14.5 MB | **307 KB** |
 | 首屏下载（pck+wasm+js） | ~54 MB | **~39.8 MB**（-26%） |
-| 运行时字体内存 | ~16 MB | **~0.3 MB** |
+| 运行时字体内存 | ~16 MB | **~0.1 MB** |
 
-**做法**：从会渲染 UI 文本的源码（`scenes/`、`meta/`、`project.godot`、`levels/`）抽取所有字符，
-用 HarfBuzz（`subset-font`，Node 包）裁剪。完整字体自动下载（`notofonts/noto-cjk` 的 SubsetOTF），
+**做法**：从会渲染 UI 文本的源码（`scenes/`、`meta/`、`*.tscn`、`project.godot`）里提取**字符串字面量**
+（注释与标识符永远不会被渲染，不该逼字体包含里面的生僻符号，如 `∘`、`——`），
+加上 `levels/*.json` 全量；再用 HarfBuzz（`subset-font`，Node 包）裁剪。
+完整字体自动下载（`notofonts/noto-cjk` 的 SubsetOTF），
 `subset-font` 缺失时自动 `npm install` 到 `.tools/fontsubset/`。
 
 **守卫**：`tests/test_font.gd` 扫描同样的来源，断言每个字符都有字形，
 并断言字体 < 1MB（防止有人不小心把完整字体换回去）。
 新增文案用到子集外的字会**直接测试失败**，而不是静默变成豆腐块。
 
-> 两边扫描范围必须一致（`UI_SOURCES`）。core/solver/tools/tests 是 headless 层，
+> 两边扫描范围必须一致（`STRING_RE` / `UI_SOURCES`）。core/solver/tools/tests 是 headless 层，
 > 不渲染文字，其注释里的 `∘` 之类符号也未必在 Noto Sans SC 里，所以不计入。
 
 ---

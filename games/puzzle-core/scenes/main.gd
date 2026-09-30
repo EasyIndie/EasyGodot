@@ -18,6 +18,8 @@ var _run_moves: Array = []      # 本局已走的方向标签序列（用于 Rep
 var _replaying: bool = false
 var replay_label: Label
 var hud_layer: CanvasLayer
+# ?lite=1：低端 GPU / 排障开关——关阴影与渐变幕布、停逐帧材质更新
+var lite_mode: bool = false
 
 # HUD 节点
 var level_label: Label
@@ -39,6 +41,7 @@ var transitioning: bool = false
 
 
 func _ready() -> void:
+	lite_mode = _query_flag("lite")
 	_setup_camera()
 	_setup_light()
 	_setup_environment()
@@ -49,12 +52,21 @@ func _ready() -> void:
 	levels = _scan_levels()
 	_setup_level_select()
 	game = Game.new()
+	game.low_effects = lite_mode
 	game.name = "Game"
 	add_child(game)
 	game.moved.connect(_on_moved)
 	game.won.connect(_on_won)
 	game.fell.connect(_on_fell)
 	_load_level(0, false)
+
+
+func _query_flag(name: String) -> bool:
+	# 读取 URL 查询参数（仅 Web 有效），用于低端 GPU / 排障开关（如 ?lite=1）
+	if not OS.has_feature("web"):
+		return false
+	var q: String = str(JavaScriptBridge.eval("window.location.search", true))
+	return q.contains(name + "=1")
 
 
 func _scan_levels() -> Array:
@@ -441,7 +453,7 @@ func _setup_light() -> void:
 	light.rotation_degrees = Vector3(-52.0, -38.0, 0.0)
 	light.light_energy = LIGHT_ENERGY * 1.15
 	light.light_color = Color(1.0, 0.96, 0.90)  # 略暖，画面不生硬
-	light.shadow_enabled = true                 # 方块在瓦片上投影 → 立体感
+	light.shadow_enabled = not lite_mode  # 方块在瓦片上投影 → 立体感（lite 模式关闭）
 	light.directional_shadow_max_distance = 40.0
 	add_child(light)
 
@@ -463,6 +475,8 @@ func _setup_environment() -> void:
 
 func _setup_backdrop() -> void:
 	# 挂在相机前的渐变幕布（充当天空）：比纯色背景自然得多，且全渲染后端可用
+	if lite_mode:
+		return
 	var sh := Shader.new()
 	sh.code = """
 shader_type spatial;

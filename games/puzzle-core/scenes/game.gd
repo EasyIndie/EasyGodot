@@ -42,6 +42,7 @@ var won_flag: bool = false
 var lost_flag: bool = false
 var animating: bool = false
 var animate: bool = true     # false = 同步（测试用）
+var low_effects: bool = false  # 低端 GPU / 排障：停掉逐帧材质更新
 var move_count: int = 0
 var _tween: Tween = null
 
@@ -351,7 +352,7 @@ func _make_box(size: Vector3, color: Color, emissive: bool = false) -> MeshInsta
 
 func _process(delta: float) -> void:
 	# 目标格「呼吸」发光：既吸引注意，也让画面久看不呆板
-	if goal_tiles.is_empty():
+	if low_effects or goal_tiles.is_empty():
 		return
 	_glow_t += delta
 	var glow: float = 0.35 + 0.25 * sin(_glow_t * 2.0)

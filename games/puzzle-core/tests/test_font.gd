@@ -54,6 +54,18 @@ func _collect(text: String, into: Dictionary) -> void:
 			into[c] = true
 
 
+# 只取字符串字面量：**注释与标识符永远不会被渲染**，不该逼迫字体去包含
+# 它们里面的生僻符号（例如注释里的 ∘、—— 未必存在于 Noto Sans SC）。
+const STRING_RE := "\"[^\"\n]*\"|'[^'\n]*'"
+
+
+func _collect_strings(text: String, into: Dictionary) -> void:
+	var re := RegEx.new()
+	re.compile(STRING_RE)
+	for m in re.search_all(text):
+		_collect(m.get_string(), into)
+
+
 func _read(path: String) -> String:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null:
@@ -81,10 +93,10 @@ func _test_glyph_coverage() -> void:
 		var name := dir.get_next()
 		while name != "":
 			if name.ends_with(".gd") or name.ends_with(".tscn"):
-				_collect(_read(d + "/" + name), chars)
+				_collect_strings(_read(d + "/" + name), chars)
 			name = dir.get_next()
 		dir.list_dir_end()
-	_collect(_read("res://project.godot"), chars)
+	_collect_strings(_read("res://project.godot"), chars)
 	# 关卡 JSON 目前无文案，但一旦加上就应被覆盖，故一并扫描
 	var lv_dir := DirAccess.open("res://levels")
 	if lv_dir != null:

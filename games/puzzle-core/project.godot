@@ -25,6 +25,18 @@ theme/custom_font="res://fonts/NotoSansSC-Regular.otf"
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
-; Web（尤其 Safari）对 WebGL 内存很敏感：显式关掉 MSAA，避免多重采样帧缓冲
+
+; ── Web / 移动端 GPU 预算很紧（Safari 尤其）——以下是实测踩坑后的显式限定 ──
+;
+; 1) 关掉 MSAA：多重采样帧缓冲在受限 GPU 上代价很高
 anti_aliasing/quality/msaa_3d=0
 anti_aliasing/quality/msaa_2d=0
+;
+; 2) 方向光阴影默认 4096×4096 = 1680 万像素，比整个画面（我们钐制在 160 万）还大 10 倍！
+;    这是 GPU 内存被吃穿、上下文被 Safari 回收的直接原因之一。降到 1024（约 100 万像素）。
+lights_and_shadows/directional_shadow/size=1024
+lights_and_shadows/directional_shadow/size.mobile=512
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=0
+;
+; 3) 本作没有位置光源，但把图集尺寸一并压低，避免默认值被意外分配
+lights_and_shadows/positional_shadow/atlas_size=1024

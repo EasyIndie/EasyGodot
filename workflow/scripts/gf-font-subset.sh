@@ -77,12 +77,13 @@ echo "    已就绪: $WORK/node_modules/subset-font"
 echo "=== 3/4 抽取项目实际用字 ==="
 GLYPHS="$WORK/glyphs.txt"
 python3 - "$ROOT" "$PROJECT" "$GLYPHS" <<'PY'
-import io, glob, os, sys
+import io, glob, os, re, sys
 root, project, out = sys.argv[1], sys.argv[2], sys.argv[3]
 # ── UI 文案来源（必须与 tests/test_font.gd 的扫描范围一致！）────────────
-# 只收集「会真正渲染成文字」的文件：core/solver/tools/tests 是 headless 层，不渲染文字，
-# 它们注释里的符号（如 ∘）也未必在 Noto Sans SC 里，不应计入。
-UI_SOURCES = ["scenes/*.gd", "meta/*.gd", "*.tscn", "*.godot", "levels/*.json"]
+# 只取字符串字面量：注释与标识符永远不会被渲染，不该逼迫字体包含它们里面的
+# 生僻符号（如注释里的 ∘、—— 未必存在于 Noto Sans SC）。
+STRING_RE = re.compile(r'"[^"\n]*"|\'[^\'\n]*\'')
+UI_SOURCES = ["scenes/*.gd", "meta/*.gd", "*.tscn", "*.godot"]
 
 chars = set(chr(c) for c in range(0x20, 0x7F))     # ASCII 可见字符打底
 base = os.path.join(root, project)
@@ -90,6 +91,12 @@ files = []
 for pat in UI_SOURCES:
     files += sorted(glob.glob(os.path.join(base, pat)))
 for f in files:
+    text = io.open(f, encoding="utf-8", errors="ignore").read()
+    for lit in STRING_RE.findall(text):
+        chars.update(lit)
+# 关卡 JSON 目前无文案，但一旦加上就应被覆盖，故全量扫描（JSON 无注释）
+for f in sorted(glob.glob(os.path.join(base, "levels/*.json"))):
+    files.append(f)
     chars.update(io.open(f, encoding="utf-8", errors="ignore").read())
 io.open(out, "w", encoding="utf-8").write("".join(sorted(chars)))
 cjk = sum(1 for c in chars if ord(c) > 0x2000)

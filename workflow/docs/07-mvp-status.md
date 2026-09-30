@@ -120,13 +120,11 @@ pi 里：`/test` `/serve` `/shot` `/games`
 - 浏览器对 `index.pck` 缓存极顽固 → 用 `gf-serve.sh`（`Cache-Control: no-store`）。
 - Godot 4 坑：`Vector3i` 无 `dot()`；`Array.sort()` 不能排 `Vector3i`（用 `sort_custom`）；
   版本头污染 stdout（用 `--no-header`）；默认字体无中文字形（已内置 Noto Sans SC **子集**）。
-- **内置字体必须是子集**：Noto Sans SC 完整字体 16MB+，Web 要下载它、移动端还要常驻内存
-  （iOS Safari 对单标签页内存极敏感）。用 `workflow/scripts/gf-font-subset.sh`
-  按项目实际用字裁剪：**16.4MB → 272KB**，pck 从 **14.5MB → 320KB**（下载总量减少约 26%）。
-  `tests/test_font.gd` 是守卫：新增文案若用到子集外的字会直接测试失败（避免豆腐块）。
-  > 注意：该测试只扫描**会渲染文字**的来源（`scenes/`、`meta/`、`project.godot`、`levels/`），
-  > 必须与 `gf-font-subset.sh` 里的 `UI_SOURCES` 保持一致；core/solver/tools/tests 是 headless 层，
-  > 不渲染文字，其注释里的符号（如 `∘`）也未必存在于 Noto Sans SC。
+- **内置字体必须是子集**：完整 Noto Sans SC 16.4MB，而 UI 只用几百字（Web 要下载它，
+  移动端还要常驻内存）。`workflow/scripts/gf-font-subset.sh` 按项目实际用字裁剪：
+  **16.4MB → 100KB**，pck **14.5MB → 307KB**，首屏下载 -26%。
+  `tests/test_font.gd` 是守卫，只扫描**字符串字面量**（注释里的 `∘`、`——` 永远不会被渲染，
+  不该逼字体包含），并断言字体 < 1MB；两边扫描规则（`STRING_RE` / `UI_SOURCES`）必须一致。
 - **WSL 的 drvfs 挂载下 `core.fileMode=false`**：git 无法记录执行位，所有文件都入库为 `100644`，
   于 CI 里直接调用 `workflow/scripts/gf-test.sh` 会报 `Permission denied`（真实踩过）。
   解决：`git update-index --chmod=+x workflow/scripts/*.sh` 显式标注。
@@ -134,9 +132,15 @@ pi 里：`/test` `/serve` `/shot` `/games`
   （`variant/thread_support=false`）；另外**免费版组织**的 Pages 只能从**公开仓库**发布。
   首次启用 Pages 需管理员显式调用 `gh api -X POST repos/<o>/<r>/pages -f build_type=workflow`
   （工作流的 `GITHUB_TOKEN` 没有 admin，`configure-pages` 的 `enablement` 开不了）。
-- **Safari 的 WebGL 内存上限远紧于 Chrome**：`canvas_resize_policy=2`（绘图缓冲 = 窗口×DPR）
-  在 Retina 上会直接爆掉并报 `WebGL context lost`。已改为策略 1（固定 1280×720）+ 注入 CSS 铺满窗口；
-  诊断页 `/diag.html` 可现场测出真实 GPU 与帧缓冲容量。
+- **Safari 的 WebGL 内存上限远紧于 Chrome**（实测：canvas 1752×912、DPR 钐制后 0.91，
+  但跑 **9.5 秒**后上下文丢失，**新建 WebGL2 上下文已处“丢失”状态** → 整个 GPU 进程挂了）。
+  真正的内存大户不是 canvas，而是 **方向光阴影默认 4096×4096 = 1680 万像素**，
+  比画面（钐制在 160 万）还大 **10.5 倍**。已在 `project.godot` 降到 1024（mobile 512）、
+  关柔和阴影过滤；无位置光源但 `positional_shadow/atlas_size` 也从 4096 降到 1024。
+- **Web 上不能信任 `canvas_resize_policy` 的语义**：策略 1 究竟取项目尺寸还是窗口尺寸
+  在不同版本/平台上不一致。可靠做法是**直接钐制 `devicePixelRatio`**（注入 JS），
+  使绘图缓冲总像素有确定性上限；双保险：覆盖 `window.devicePixelRatio` +
+  猴补丁 `GodotDisplayScreen.getPixelRatio`。—— 顺带读 `?lite=1` 可在受限 GPU 上二分定位。
 
 ---
 
