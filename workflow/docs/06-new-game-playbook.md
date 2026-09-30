@@ -82,7 +82,8 @@ workflow/scripts/gf-export.sh games/my-game
 | `workflow/scripts/gf-export.sh [game] [平台...]` | 一键导出（Web + Linux + Windows） |
 | `workflow/scripts/gf-package.sh [game] [--appid N]` | 打 Steam Demo 分发包（zip + SteamPipe 配置） |
 | `workflow/scripts/gf-pages.sh [game] [--deploy]` | 生成 / 发布 GitHub Pages 静态站点 |
-| `workflow/scripts/gf-font-subset.sh [game]` | 按项目实际用字重建字体子集（体积/内存优化） |
+| `workflow/scripts/gf-font-subset.sh [game]` | 按项目实际用字重建字体子集（体积/内存优化）。**改了 UI 文案后必须重跑**（`test_font.gd` 会拦截缺字形） |
+| `workflow/scripts/gf-web-inject.sh [game]` | 把 `workflow/web/head_include.html` 同步进 `export_presets.cfg`（安全区域 / 像素比预算 / 移动端手势隔离），`gf-export.sh` 会自动调用 |
 
 **pi 斜杠命令**（装 `workflow/pi-extensions/game-factory.ts` 后，免开终端）：
 

@@ -1,6 +1,7 @@
 # test_generator.gd — 关卡生成器测试（headless）。
 extends SceneTree
 
+const Shapes = preload("res://core/shapes.gd")
 const Generator = preload("res://tools/level_generator.gd")
 const Validate = preload("res://solver/validate.gd")
 
@@ -60,15 +61,26 @@ func _test_determinism() -> void:
 
 
 func _test_shape_option() -> void:
-	# 生成器应支持指定形状：默认 domino，也能生成 cube（单格形状）
+	# 起始姿态由**形状自己的方向表**决定：生成器不该认识任何具体形状。
+	# 因此每个生成的关卡，其 orientation 都必须是该形状方向表里的名字。
 	var gen = Generator.new()
-	var res: Dictionary = gen.generate(11, 6, 6, 0.10, "any", 5, 1, "cube")
-	check(res["levels"].size() == 5, "应生成 5 个 cube 关卡，got=" + str(res["levels"].size()))
+	var names: Array = Shapes.orientation_names("domino")
+	check(names.size() == 3, "domino 应有 3 个语义方向")
+	var res: Dictionary = gen.generate(11, 6, 6, 0.10, "any", 5, 1, "domino")
+	check(res["levels"].size() == 5, "应生成 5 个关卡，got=" + str(res["levels"].size()))
+	var seen_orient: Dictionary = {}
 	for lv in res["levels"]:
-		check(lv["start"]["shape"] == "cube", "起始形状应为 cube")
+		check(lv["start"]["shape"] == "domino", "起始形状应为 domino")
+		check(names.has(str(lv["start"]["orientation"])), "起始姿态应取自方向表")
+		seen_orient[str(lv["start"]["orientation"])] = true
 		var r: Dictionary = Validate.validate_dict(lv)
-		check(r["status"] == "valid", "生成的 cube 关卡应合法: " + str(r["errors"]))
-		check(int(r["optimal_moves"]) >= 1, "cube 关卡应可解")
+		check(r["status"] == "valid", "生成的关卡应合法: " + str(r["errors"]))
+		check(int(r["optimal_moves"]) >= 1, "关卡应可解")
+	check(seen_orient.size() > 1, "多次生成应覆盖到多种起始姿态")
+
+	# 生成的关卡 JSON 不应带任何机关字段（机制已移除，不在产物里留痕）
+	check(not res["levels"][0].has("mechanic"), "生成的关卡不应含 mechanic 字段")
+
 
 	var d = Generator.new()
 	var res2: Dictionary = d.generate(11, 5, 5, 0.10, "any", 3, 1)

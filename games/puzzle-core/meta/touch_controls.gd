@@ -1,11 +1,27 @@
-# touch_controls.gd — 触屏操作层：方向键（D-pad）+ 动作按钮 + 滑动手势。
+# touch_controls.gd — 触屏操作层：方向键（D-pad）+ 动作按钮 + 滑动手势 + 手势提示。
 #
 # 只在触屏设备显示（`main.gd` 用 DisplayServer.is_touchscreen_available() 判定，
 # 也可用 `?touch=1` / `?touch=0` 强制，桌面调试可按 T 切换）。
 #
-# **方向映射与键盘完全一致**（→=+x、←=-x、↓=+z、↑=-z），也等于网格轴方向。
-# 因为相机是斜 45° 等距视角，方块在屏幕上表现为斜向移动 —— 这是既定的取景约定，
-# 一套心智模型同时适用于键盘和触屏，不搞两套。
+# 设计原则（几条都是踩过坑之后定下来的）：
+#
+#  1) **滑动按屏幕方向映射**，不是网格轴方向。
+#     相机是斜 45° 等距视角，四个网格方向在屏幕上成对角分布：
+#        -z = 右上   +x = 右下   +z = 左下   -x = 左上
+#     所以「往哪滑，方块就往哪滚」。早期按网格轴映射的结果是：
+#     手指往上滑，方块往右上滚 —— 玩家立刻会觉得“不听话”。
+#
+#  2) **D-pad 摆在四角、用对角箭头**（↖↗↙↘），
+#     让「按钮位置 / 箭头方向 / 方块去向」三者一致。
+#
+#  3) 每个功能都必须有**可点的入口**。（选关界面曾经只能靠 Esc 关闭，
+#     手机上进去就出不来。）
+#
+#  4) 所有控件都要避开**安全区域**（刘海 / 灵动岛 / 底部手势条），
+#     否则 iPhone 横屏时按钮会被灵动岛切掉、底部按钮会被手势条压住。
+#
+#  5) 触屏是“指向性”输入但**看不见规则**，所以第一次进关卡要给一次
+#     手势方向提示（对角线），并随第一次成功移动自动收起。
 extends CanvasLayer
 
 signal direction(d: Vector3i)
@@ -15,7 +31,7 @@ signal replay_pressed
 
 const LAYOUT = preload("res://meta/ui_layout.gd")
 
-const SWIPE_MIN := 26.0        # 最小滑动距离（缓冲区像素）
+const SWIPE_MIN := 26.0        # 最小滑动距离（像素）
 const SWIPE_MAX_TIME := 0.9    # 超过此时长不算滑动
 const SWIPE_COOLDOWN := 0.12   # 触屏会再模拟一次鼠标事件，用冷却去重
 
@@ -28,34 +44,54 @@ const GLYPH := {
 	Vector3i(-1, 0, 0): "↖",
 }
 
+# 动作按钮：**纯文字**。
+# 为什么不用图标字形：内置的 Noto Sans SC 子集几乎没有符号字形
+# （↺ ☰ ▶ 全都缺），一旦缺字形就会渲染成豆腐块——字体守卫测试会直接拦下来。
+# 与其为了图标再挂一套符号字体，不如把字写清楚；回放中的状态用**颜色**表达
+# （见 set_replay_playing），这比换一个模糊的小图标更好认。
+const ACTION_RESTART := "重开"
+const ACTION_SELECT := "选关"
+const ACTION_REPLAY := "回放"
+const ACTION_STOP := "停止回放"
+
+const HINT_TEXT := "滑动屏幕即可移动　↖ ↗ ↙ ↘"
+const HINT_TIME := 6.0   # 提示自动收起时间（秒）
+
+var _root: Control
 var _pad: GridContainer
 var _actions: VBoxContainer
+var _hint: PanelContainer
+var _hint_label: Label
 var _dir_buttons: Array = []
 var _action_buttons: Array = []
 var _unit: float = 64.0
 var _screen_dirs: Dictionary = {}   # 由 main.gd 用相机 unproject 现算后注入
+var _insets: Dictionary = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
 var _tracking: bool = false
 var _start_pos: Vector2 = Vector2.ZERO
 var _start_time: float = 0.0
 var _cooldown: float = 0.0
+var _hint_done: bool = false
+var _hint_timer: float = 0.0
+var _replay_playing: bool = false
 
 
 func _ready() -> void:
 	layer = 5  # 在 HUD(0) 之上、换关过渡层(10) 之下
 	visible = false
 
-	var root := Control.new()
-	root.name = "TouchRoot"
-	root.set_anchors_preset(Control.PRESET_FULL_RECT)
-	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(root)
+	_root = Control.new()
+	_root.name = "TouchRoot"
+	_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_root)
 
 	_pad = GridContainer.new()
 	_pad.columns = 3
 	_pad.add_theme_constant_override("h_separation", 6)
 	_pad.add_theme_constant_override("v_separation", 6)
 	_pad.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(_pad)
+	_root.add_child(_pad)
 
 	# 3×3：把四个方向放在**四角**（＝屏幕上的四个对角），中心与四边留空
 	var cells: Array = [
@@ -78,13 +114,40 @@ func _ready() -> void:
 	_actions = VBoxContainer.new()
 	_actions.add_theme_constant_override("separation", 8)
 	_actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(_actions)
-	for spec in [["重开", "restart_pressed"], ["选关", "select_pressed"], ["回放", "replay_pressed"]]:
+	_root.add_child(_actions)
+	var specs: Array = [
+		[ACTION_RESTART, "restart_pressed"],
+		[ACTION_SELECT, "select_pressed"],
+		[ACTION_REPLAY, "replay_pressed"],
+	]
+
+	for spec in specs:
 		var b := _make_button(str(spec[0]))
 		var sig: String = str(spec[1])
 		b.pressed.connect(func() -> void: emit_signal(sig))
 		_actions.add_child(b)
 		_action_buttons.append(b)
+
+	# 手势提示：一条会自己收起的窄条。触屏玩家不知道“对角线滑动”这套规则，
+	# 光有 D-pad 也说明不了「滑动方向 = 方块去向」。
+	_hint = PanelContainer.new()
+	_hint.visible = false
+	_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var hsb := StyleBoxFlat.new()
+	hsb.bg_color = Color(0.07, 0.10, 0.17, 0.80)
+	hsb.set_corner_radius_all(14)
+	hsb.set_border_width_all(1)
+	hsb.border_color = Color(1, 1, 1, 0.10)
+	hsb.content_margin_left = 14.0
+	hsb.content_margin_right = 14.0
+	hsb.content_margin_top = 7.0
+	hsb.content_margin_bottom = 7.0
+	_hint.add_theme_stylebox_override("panel", hsb)
+	_hint_label = Label.new()
+	_hint_label.text = HINT_TEXT
+	_hint_label.add_theme_color_override("font_color", Color(0.86, 0.92, 1.0))
+	_hint.add_child(_hint_label)
+	_root.add_child(_hint)
 
 	get_viewport().size_changed.connect(_apply_layout)
 	_apply_layout()
@@ -102,9 +165,19 @@ func is_shown() -> bool:
 	return visible
 
 
+func set_safe_insets(insets: Dictionary) -> void:
+	# 由 main.gd 注入（Web 读 CSS env()，原生平台读 DisplayServer）
+	_insets = insets
+	_apply_layout()
+
+
+func safe_insets() -> Dictionary:
+	return _insets.duplicate()
+
+
 func bottom_inset() -> float:
-	# 底部被控件占用的高度（供 HUD 提示文字避让）
-	return _unit * 3.0 + _unit * 0.68
+	# 底部被控件（含安全区）占用的高度，供 HUD 提示带避让
+	return _unit * 3.0 + _unit * 0.68 + float(_insets.get("bottom", 0.0))
 
 
 func set_screen_dirs(dirs: Dictionary) -> void:
@@ -112,28 +185,120 @@ func set_screen_dirs(dirs: Dictionary) -> void:
 	_screen_dirs = dirs
 
 
+func set_replay_playing(playing: bool) -> void:
+	# 回放中同一个按钮兼作「停止」：触屏没有 Esc，否则玩家只能干等回放放完。
+	# 状态同时用**文字**和**颜色**表达：文字说清楚会发生什么，
+	# 颜色让它在余光里也能被注意到（视线通常在棋盘上）。
+	_replay_playing = playing
+	if _action_buttons.size() >= 3:
+		var b: Button = _action_buttons[2]
+		b.text = ACTION_STOP if playing else ACTION_REPLAY
+		if playing:
+			b.add_theme_stylebox_override("normal", _sb(Color(0.42, 0.16, 0.18, 0.80), Color(1.0, 0.55, 0.55, 0.65)))
+			b.add_theme_stylebox_override("hover", _sb(Color(0.55, 0.22, 0.24, 0.90), Color(1.0, 0.65, 0.65, 0.85)))
+		else:
+			b.add_theme_stylebox_override("normal", _sb(Color(0.09, 0.12, 0.20, 0.62), Color(1, 1, 1, 0.14)))
+			b.add_theme_stylebox_override("hover", _sb(Color(0.14, 0.19, 0.30, 0.72), Color(0.55, 0.75, 1.0, 0.60)))
+
+
+func is_replay_playing() -> bool:
+	return _replay_playing
+
+
+func show_swipe_hint() -> void:
+	# 每次进入关卡给一次提示，但**每局游戏只给一次**：
+	# 反复弹提示会变成噪音，玩家学会之后就不需要了。
+	if _hint_done:
+		return
+	_hint.visible = true
+	_hint.modulate.a = 0.0
+	var tw := create_tween()
+	tw.tween_property(_hint, "modulate:a", 1.0, 0.35)
+	_hint_timer = HINT_TIME
+	_apply_layout()
+
+
+func dismiss_swipe_hint() -> void:
+	# 玩家第一次成功移动后立即收起（比等到超时更贴合“学会了”这个时刻）
+	if _hint_done or _hint == null:
+		return
+	_hint_done = true
+	_hint_timer = 0.0
+	var tw := create_tween()
+	tw.tween_property(_hint, "modulate:a", 0.0, 0.4)
+	tw.finished.connect(func() -> void: _hint.visible = false)
+
+
+func hint_visible() -> bool:
+	# 以 visible 为准（淡入过程中也算“正在显示”），而不是用 alpha 判断：
+	# 刚调用 show_swipe_hint() 的这一帧 alpha 还是 0，用 alpha 判定会得到“没显示”。
+	return _hint != null and _hint.visible
+
+
+func hint_text() -> String:
+	return _hint_label.text if _hint_label != null else ""
+
+
+func layout_info() -> Dictionary:
+	# 供测试断言：控件是否都落在屏幕（含安全区）之内
+	return {
+		"unit": _unit,
+		"pad": {"pos": _pad.position, "size": _pad.size},
+		"actions": {"pos": _actions.position, "size": _actions.size},
+		"hint": {"pos": _hint.position, "size": _hint.size},
+		"insets": _insets.duplicate(),
+	}
+
+
 # ── 布局 ───────────────────────────────────────────────
 
 func _apply_layout() -> void:
+	if _pad == null:
+		return
 	var vp: Vector2 = get_viewport().get_visible_rect().size
 	_unit = LAYOUT.touch_unit(vp)
 	var margin: float = _unit * 0.34
 	var pad: float = _unit * 3.0
+	var sl: float = float(_insets.get("left", 0.0))
+	var sr: float = float(_insets.get("right", 0.0))
+	var sb: float = float(_insets.get("bottom", 0.0))
+	var st: float = float(_insets.get("top", 0.0))
 
-	_pad.position = Vector2(margin, vp.y - pad - margin)
+	# 左下：D-pad（菱形四角）
+	_pad.position = Vector2(sl + margin, vp.y - sb - pad - margin)
 	_pad.size = Vector2(pad, pad)
 	for b in _dir_buttons:
 		b.custom_minimum_size = Vector2(_unit, _unit)
 		b.add_theme_font_size_override("font_size", int(_unit * 0.46))
 
-	var bw: float = _unit * 1.60
-	var bh: float = _unit * 0.72
+	# 右下：动作按钮竖排（拇指自然落点，且不与 D-pad 抢空间）
+	var bw: float = _unit * 1.85
+	var bh: float = _unit * 0.74
 	var sep: float = 8.0
 	for b in _action_buttons:
 		b.custom_minimum_size = Vector2(bw, bh)
-		b.add_theme_font_size_override("font_size", int(_unit * 0.31))
-	_actions.size = Vector2(bw, bh * float(_action_buttons.size()) + sep * float(maxi(_action_buttons.size() - 1, 0)))
-	_actions.position = Vector2(vp.x - bw - margin, vp.y - _actions.size.y - margin)
+		b.add_theme_font_size_override("font_size", int(_unit * 0.30))
+	var ah: float = bh * float(_action_buttons.size()) + sep * float(maxi(_action_buttons.size() - 1, 0))
+	_actions.size = Vector2(bw, ah)
+	_actions.position = Vector2(vp.x - sr - bw - margin, vp.y - sb - ah - margin)
+
+	# 手势提示：**左对齐在 D-pad 正上方**。
+	# 早先横屏时把它水平居中，结果正好落在棋盘中央，把棋盘和目标格都盖住了 ——
+	# 提示应该贴着它要解释的那个控件，而不是抢画面中心。
+	#
+	# 窄屏适配用「缩字号」而不是「换行」：换行会让提示条变成两行高，
+	# 在小屏上又会去挤棋盘；缩字号则始终是一行，位置稳定、可预测。
+	var max_w: float = maxf(vp.x - sl - sr - margin * 2.0, 120.0)
+	var fs: float = clampf(_unit * 0.26, 13.0, 22.0)
+	_hint_label.add_theme_font_size_override("font_size", int(fs))
+	var hs: Vector2 = _hint.get_combined_minimum_size()
+	if hs.x > max_w and hs.x > 1.0:
+		fs = maxf(fs * (max_w / hs.x), 10.0)
+		_hint_label.add_theme_font_size_override("font_size", int(fs))
+		hs = _hint.get_combined_minimum_size()
+	_hint.size = Vector2(minf(hs.x, max_w), hs.y)
+	var hint_y: float = vp.y - sb - pad - margin - hs.y - 10.0
+	_hint.position = Vector2(sl + margin, maxf(hint_y, st + 8.0))
 
 
 func _make_button(text: String) -> Button:
@@ -164,6 +329,10 @@ func _sb(bg: Color, border: Color) -> StyleBoxFlat:
 func _process(delta: float) -> void:
 	if _cooldown > 0.0:
 		_cooldown -= delta
+	if _hint_timer > 0.0:
+		_hint_timer -= delta
+		if _hint_timer <= 0.0:
+			dismiss_swipe_hint()
 
 
 static func swipe_dir(delta: Vector2, screen_dirs: Dictionary = {}) -> Vector3i:

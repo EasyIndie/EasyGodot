@@ -7,6 +7,8 @@ const Progress = preload("res://meta/progress.gd")
 const LevelSelect = preload("res://meta/level_select.gd")
 const TouchControls = preload("res://meta/touch_controls.gd")
 const UiLayout = preload("res://meta/ui_layout.gd")
+const RenderQuality = preload("res://meta/render_quality.gd")
+const Ending = preload("res://meta/ending.gd")
 
 var game: Node3D = null
 var cam: Camera3D = null
@@ -26,6 +28,15 @@ var lite_mode: bool = false
 var touch_controls = null
 var _touch_active: bool = false
 var _query_string: String = ""
+# 通关庆祝层（全部 20 关通关后出现）
+var ending = null
+# 安全区域（刘海 / 灵动岛 / 底部手势条）每边被遮挡的像素数
+var _safe_insets: Dictionary = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
+# 自适应画质档位（见 meta/render_quality.gd）
+var _quality_tier: int = 3
+var _q_accum: float = 0.0
+var _q_frames: int = 0
+var _q_elapsed: float = 0.0
 
 # HUD 节点
 var level_label: Label
@@ -35,6 +46,15 @@ var fail_label: Label
 var help_label: Label
 var best_label: Label
 var progress_bar: ProgressBar
+var _hud_narrow: bool = false
+var left_panel: PanelContainer
+var right_panel: PanelContainer
+var backdrop: MeshInstance3D = null
+
+# 存档路径覆盖（测试用；空 = 用默认 user://progress.json）
+const PROGRESS_PATH_SETTING := "puzzle/progress_path"
+const LEFT_PANEL_W := 236.0
+const RIGHT_PANEL_W := 196.0
 
 const LIGHT_ENERGY := 1.15  # 主光基础亮度
 
@@ -50,6 +70,12 @@ func _ready() -> void:
 	if OS.has_feature("web"):
 		_query_string = str(JavaScriptBridge.eval("window.location.search", true))
 	lite_mode = _query_flag("lite")
+	# 画质档位：默认按设备类别起步，?tier=0..3 可强制（排障用）
+	var tier_arg: String = _query_value("tier", "")
+	if tier_arg == "":
+		_quality_tier = RenderQuality.initial_tier(_touch_wanted_early(), lite_mode)
+	else:
+		_quality_tier = clampi(int(float(tier_arg)), 0, RenderQuality.TIERS - 1)
 	_setup_camera()
 	_setup_light()
 	_setup_environment()
@@ -57,7 +83,8 @@ func _ready() -> void:
 	_setup_hud()
 	_setup_transition()
 	_setup_touch_controls()
-	progress = Progress.new()
+	_setup_ending()
+	progress = Progress.new(_progress_path())
 	levels = _scan_levels()
 	_setup_level_select()
 	game = Game.new()
@@ -68,14 +95,147 @@ func _ready() -> void:
 	game.won.connect(_on_won)
 	game.fell.connect(_on_fell)
 	_load_level(0, false)
+	_apply_render_quality()
+	_update_safe_area()
 	_refresh_bands()
-	if not get_viewport().size_changed.is_connected(_refresh_bands):
-		get_viewport().size_changed.connect(_refresh_bands)
+	if not get_viewport().size_changed.is_connected(_on_viewport_resized):
+		get_viewport().size_changed.connect(_on_viewport_resized)
+
+
+func _progress_path() -> String:
+	# 存档路径可被项目设置覆盖：集成测试会把它指到临时文件。
+	# 为什么需要这个口子：测试曾经直接写真实的 user://progress.json，
+	# 于是「全新进度」的断言在第二次运行时就不成立了（上次跑测留下的记录还在）。
+	# 测试污染玩家存档本身就是 bug，顺手在这里堵掉。
+	var p: String = str(ProjectSettings.get_setting(PROGRESS_PATH_SETTING, ""))
+	return p if p != "" else Progress.DEFAULT_PATH
 
 
 func _query_flag(name: String) -> bool:
 	# 读取 URL 查询参数（仅 Web 有效），用于低端 GPU / 触屏等开关
 	return _query_string.contains(name + "=1")
+
+
+func _query_value(name: String, fallback: String) -> String:
+	# 读取形如 ?name=value 的数值型查询参数
+	var m := RegEx.new()
+	m.compile("[?&]" + name + "=([0-9.]+)")
+	var r := m.search(_query_string)
+	return r.get_string(1) if r != null else fallback
+
+
+func _touch_wanted_early() -> bool:
+	# _ready 早期就要决定画质档位，此时 touch_controls 还没建好，
+	# 所以这里单独判定一次（与 _touch_wanted() 同一套规则）
+	if _query_string.contains("touch=1"):
+		return true
+	if _query_string.contains("touch=0"):
+		return false
+	return DisplayServer.is_touchscreen_available()
+
+
+# ── 画质（自适应）───────────────────────────────────────────
+
+func _apply_render_quality() -> void:
+	# 把档位落到具体渲染设置上。改档只在**真正变化**时发生，
+	# 所以玩家看到的是「一开始就清晰」，而不是画质来回闪。
+	var vp := get_viewport()
+	if vp != null:
+		vp.msaa_3d = RenderQuality.msaa(_quality_tier)
+	if light != null:
+		light.shadow_enabled = RenderQuality.shadows(_quality_tier)
+	if backdrop != null:
+		backdrop.visible = RenderQuality.backdrop(_quality_tier)
+	if game != null:
+		game.low_effects = not RenderQuality.glow(_quality_tier)
+		game.set_quality_tier(_quality_tier)
+
+
+func _process(delta: float) -> void:
+	# 自适应画质：按实测帧时间升降档（带滞回，避免抖动）
+	_q_accum += delta
+	_q_frames += 1
+	_q_elapsed += delta
+	if _q_elapsed < RenderQuality.SAMPLE_SEC or _q_frames < 10:
+		return
+	var avg_ms: float = _q_accum / float(_q_frames) * 1000.0
+	var next: int = RenderQuality.next_tier(_quality_tier, avg_ms, _q_elapsed)
+	_q_accum = 0.0
+	_q_frames = 0
+	_q_elapsed = 0.0
+	if next != _quality_tier:
+		_quality_tier = next
+		_apply_render_quality()
+
+
+# ── 安全区域 ──────────────────────────────────────────────
+
+func _on_viewport_resized() -> void:
+	_update_safe_area()
+	_refresh_bands()
+
+
+func _update_safe_area() -> void:
+	# 各平台把「每边被系统 UI 遮挡多少像素」告诉我们，这里只负责换算 + 夹取。
+	# Web 读 CSS env(safe-area-inset-*)，原生平台读 DisplayServer 的可用区域。
+	var vp_size: Vector2 = get_viewport().get_visible_rect().size
+	var raw: Dictionary = {}
+	if OS.has_feature("web"):
+		raw = UiLayout.parse_insets(str(JavaScriptBridge.eval("window.gfSafeInsets()", true)))
+	else:
+		var area: Rect2i = DisplayServer.get_display_safe_area()
+		var win: Vector2i = DisplayServer.window_get_size()
+		if win.x > 0 and win.y > 0 and area.size.x > 0:
+			var sc := Vector2(vp_size) / Vector2(win)
+			raw = {
+				"left": float(area.position.x) * sc.x,
+				"top": float(area.position.y) * sc.y,
+				"right": float(maxi(win.x - area.position.x - area.size.x, 0)) * sc.x,
+				"bottom": float(maxi(win.y - area.position.y - area.size.y, 0)) * sc.y,
+			}
+	var ins: Dictionary = UiLayout.safe_insets(vp_size, raw)
+	if UiLayout.insets_equal(ins, _safe_insets):
+		return
+	_safe_insets = ins
+	if touch_controls != null:
+		touch_controls.set_safe_insets(ins)
+	if level_select != null:
+		level_select.set_safe_insets(ins)
+	if ending != null:
+		ending.set_safe_insets(ins)
+	_apply_hud_insets()
+
+
+func _apply_hud_insets() -> void:
+	# HUD 两块面板必须整体避开安全区（否则横屏 iPhone 上左上角的关卡面板会被灵动岛切掉），
+	# 并且**必须能在窄屏上共存**：手机竖屏只有 ~390px 宽，
+	# 按固定 236+196 的尺寸摆会直接互相压住（截图里「已通关 20 / 20」压到了步数上）。
+	if left_panel == null or right_panel == null:
+		return
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var sl: float = float(_safe_insets.get("left", 0.0)) + 22.0
+	var sr: float = float(_safe_insets.get("right", 0.0)) + 22.0
+	var st: float = float(_safe_insets.get("top", 0.0)) + 20.0
+	# 可用宽度按比例分给两块面板：左边拿大头（关卡文字更长），右边保证最小可读宽度
+	var avail: float = maxf(vp.x - sl - sr, 120.0)
+	var gap: float = 12.0
+	var lw: float = clampf(minf(LEFT_PANEL_W, (avail - gap) * 0.56), 120.0, LEFT_PANEL_W)
+	var rw: float = clampf(minf(RIGHT_PANEL_W, avail - gap - lw), 92.0, RIGHT_PANEL_W)
+	var narrow: bool = vp.x < 620.0
+	# 窄屏同时缩小字号 + 缩短文案（宁可信息少一点，也不要溢出错行）
+	level_label.add_theme_font_size_override("font_size", 16 if narrow else 21)
+	moves_label.add_theme_font_size_override("font_size", 16 if narrow else 21)
+	best_label.add_theme_font_size_override("font_size", 11 if narrow else 13)
+	_hud_narrow = narrow
+	left_panel.offset_left = sl
+	left_panel.offset_right = sl + lw
+	left_panel.offset_top = st
+	left_panel.offset_bottom = st + 78.0
+	right_panel.offset_left = -sr - rw
+	right_panel.offset_right = -sr
+	right_panel.offset_top = st
+	right_panel.offset_bottom = st + 78.0
+	_update_hud()
 
 
 func _setup_touch_controls() -> void:
@@ -108,42 +268,74 @@ func _apply_touch_visibility() -> void:
 
 
 func _on_touch_direction(d: Vector3i) -> void:
-	# 触屏滑动/方向键与键盘走同一条路径，但要避开选关、过渡、回放
+	# 触屏滑动/方向键与键盘走同一条路径，但要避开选关、过渡、回放、庆祝界面
 	if transitioning or _replaying:
 		return
 	if level_select != null and level_select.is_open():
 		return
-	_do_move(d)
+	if ending != null and ending.is_open():
+		return
+	var ok: bool = _do_move(d)
+	# 玩家真的动了一次方块 → 手势提示的使命完成
+	if ok and touch_controls != null:
+		touch_controls.dismiss_swipe_hint()
 
 
 func _refresh_bands() -> void:
 	# 统一安排「提示带」：
-	#   桌面          -> 底部（棋盘下方，原本帮助文字的位置）
-	#   触屏竖屏      -> 顶部（HUD 下方；底部被方向键/动作按钮占用）
-	#   触屏横屏      -> 底部（控件下方的一条窄带）
-	# 这样任何设备/朝向下，状态提示都不会压住棋盘。
+	#   桌面   -> 底部（棋盘下方，原本帮助文字的位置）
+	#   触屏   -> **一律顶部**（HUD 面板下方）
+	# 触屏为什么不分横竖屏：横屏时方向键+动作按钮会占掉底部约 40% 高度，
+	# 若把提示带放在控件上方，它就正好落在屏幕垂直中央 —— 压住棋盘正中，
+	# 玩家看不到自己刚做了什么（这正是提示带最不该出现的位置）。
+	# 一律避开安全区域（刘海/灵动岛/底部手势条）；任何朝向下都不压棋盘、不被系统 UI 遮住。
 	if help_label == null:
 		return
 	var vp: Vector2 = get_viewport().get_visible_rect().size
 	var touch_on: bool = touch_controls != null and touch_controls.is_shown()
-	var at_top: bool = touch_on and vp.y >= vp.x
+	var at_top: bool = touch_on
+	var sl: float = float(_safe_insets.get("left", 0.0))
+	var sr: float = float(_safe_insets.get("right", 0.0))
+	var st: float = float(_safe_insets.get("top", 0.0))
+	var sb: float = float(_safe_insets.get("bottom", 0.0))
+	var band_h: float = 46.0
+	var y: float
+	if at_top:
+		y = st + 82.0            # 让开 HUD 面板
+	else:
+		var occupied: float = sb
+		if touch_on:
+			# 底部控件（含其自身的安全区占位）之上
+			occupied = maxf(occupied, touch_controls.bottom_inset())
+		y = vp.y - occupied - 10.0
 	for l in [help_label, win_label, fail_label, replay_label]:
 		if l == null:
 			continue
 		l.anchor_left = 0.0
 		l.anchor_right = 1.0
+		l.offset_left = sl + 12.0
+		l.offset_right = -(sr + 12.0)
 		l.anchor_top = 0.0 if at_top else 1.0
 		l.anchor_bottom = l.anchor_top
-		l.offset_top = 98.0 if at_top else -52.0
-		l.offset_bottom = 142.0 if at_top else -8.0
+		# 注意：底部锚点下的 offset 是**相对屏幕底边**的偏移（负值向上）。
+		# 早先把屏幕绝对坐标直接写进 offset 直接把提示带到屏幕外了（top=1040 / vp=720）。
+		if at_top:
+			l.offset_top = y
+			l.offset_bottom = y + band_h
+		else:
+			l.offset_top = y - band_h - vp.y
+			l.offset_bottom = y - vp.y
 	var base: String
 	if touch_on:
-		base = "滑动屏幕，或点按左下方向键移动"
+		# 与「手势提示」分工：这里说按钮，提示条说滑动手势（早期两条文案说的是同一件事，
+		# 屏幕上却出现两行几乎一样的字）。
+		# 窄屏只留最要紧的一条（坠落规则）——按钮本身已经写着字，不需要再列一遍。
+		if vp.x < 620.0:
+			base = "掉出棋盘或落入空洞会坠落"
+		else:
+			base = "掉出棋盘或落入空洞会坠落　·　右下：重开 / 选关 / 回放"
 	else:
 		base = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     ·     掉出棋盘或落入空洞会坠落"
-	# 机关关卡要告知规则，否则玩家不知道“为什么停不下来”
-	if game != null and game.is_sliding():
-		base += "　·　冰面：方块会一路滑到不能再走"
 	help_label.text = base
 	# 同一条带只显示优先级最高的一条
 	help_label.visible = not (win_label.visible or fail_label.visible or replay_label.visible)
@@ -179,7 +371,6 @@ func _entry_for(index: int, path: String) -> Dictionary:
 		e["shape"] = str(d.get("start", {}).get("shape", "domino"))
 		e["optimal"] = int(d.get("optimal_moves", -1))
 		e["difficulty"] = str(d.get("difficulty", ""))
-		e["mechanic"] = str(d.get("mechanic", ""))
 	return e
 
 
@@ -228,6 +419,9 @@ func _do_load(index: int) -> void:
 		_frame_camera()
 		_update_hud()
 		_refresh_bands()
+		# 触屏玩家看不到键盘提示，进关卡时给一次对角线滑动提示（每局只给一次）
+		if touch_controls != null and touch_controls.is_shown():
+			touch_controls.show_swipe_hint()
 
 
 ## 换关：棋盘下沉 + 暗幕淡入（“关卡合拢”）→ 暗幕下换关 → 新棋盘降入 + 淡出
@@ -314,6 +508,48 @@ func _setup_level_select() -> void:
 	level_select.reset_requested.connect(_on_progress_reset)
 
 
+func _setup_ending() -> void:
+	ending = Ending.new()
+	ending.name = "Ending"
+	add_child(ending)
+	ending.restart_requested.connect(_on_ending_restart)
+	ending.select_requested.connect(_on_ending_select)
+	ending.closed.connect(_on_ending_closed)
+
+
+func _on_ending_restart() -> void:
+	ending.close()
+	_do_load(0)
+	_refresh_bands()
+
+
+func _on_ending_select() -> void:
+	ending.close()
+	_open_level_select()
+
+
+func _on_ending_closed() -> void:
+	_hide_hud(false)
+
+
+func _all_completed() -> bool:
+	if levels.is_empty() or progress == null:
+		return false
+	for k in _level_keys():
+		if not progress.is_completed(str(k)):
+			return false
+	return true
+
+
+func _show_ending() -> void:
+	# 防御性判断：庆祝层只在**真的全部通关**时出现，
+	# 免得将来某个调用点漏判就把庆祝动画提前放出来（那样通关成就就贬值了）
+	if ending == null or not _all_completed():
+		return
+	_hide_hud(true)          # 内部会一并隐藏触屏控件
+	ending.open_with(entries, progress)
+
+
 func _open_level_select() -> void:
 	# 通关/坠落动画期间不要弹选关（否则会和自动换关过渡打架）
 	if transitioning or _replaying or game.is_won() or game.is_lost():
@@ -322,6 +558,7 @@ func _open_level_select() -> void:
 		return
 	_hide_hud(true)
 	level_select.touch_mode = _touch_active
+	level_select.set_safe_insets(_safe_insets)
 	level_select.open_with(entries, progress, current_index)
 
 
@@ -329,6 +566,7 @@ func _on_touch_restart() -> void:
 	# 回放中按钮语义变为「停止回放」——回放可能是被误触的，必须能中止
 	if _replaying:
 		_replaying = false
+		touch_controls.set_replay_playing(false)
 		return
 	_restart()
 
@@ -337,6 +575,7 @@ func _on_touch_replay() -> void:
 	# 触屏没有 Esc：同一个按钮兼作「播放 / 停止」
 	if _replaying:
 		_replaying = false
+		touch_controls.set_replay_playing(false)
 		return
 	_play_replay()
 
@@ -370,6 +609,8 @@ func _play_replay() -> void:
 	if rep.is_empty() or (rep["moves"] as Array).is_empty():
 		return
 	_replaying = true
+	if touch_controls != null:
+		touch_controls.set_replay_playing(true)
 	_do_load(current_index)
 	var moves: Array = rep["moves"]
 	await get_tree().process_frame
@@ -390,12 +631,21 @@ func _play_replay() -> void:
 	replay_label.text = "回放结束"
 	await get_tree().create_timer(0.7).timeout
 	_replaying = false
+	if touch_controls != null:
+		touch_controls.set_replay_playing(false)
 	_do_load(current_index)   # 复位，方便玩家接着挑战
 	_refresh_bands()
 
 
 func _restart() -> void:
-	_load_level(current_index, false)
+	# 重开也走动画：坠落之后如果“啪”一下复位，玩家会以为自己误触了什么。
+	# _do_load 与 play_spawn 在同一帧内完成，所以不会先闪一下再落下。
+	if game == null or levels.is_empty():
+		return
+	_do_load(current_index)
+	if touch_controls != null and touch_controls.is_shown():
+		game.play_spawn()
+	_refresh_bands()
 
 
 func _next_level() -> void:
@@ -428,6 +678,10 @@ func _on_won() -> void:
 	await _win_beat()
 	if transitioning or levels.is_empty():
 		return
+	# 全部通关：给一个明确的“旅程结束”，而不是默默滚回第 1 关（那看起来像 bug）
+	if _all_completed():
+		_show_ending()
+		return
 	_transition_to((current_index + 1) % levels.size())
 
 
@@ -457,9 +711,9 @@ func _on_fell() -> void:
 		fail_label.visible = true
 		_refresh_bands()
 		return
-	# 触屏上没有 R 键，提示改成指向屏幕上的「重开」按钮
+	# 触屏上没有 R 键，提示必须指向屏幕上那个按钮（只说“重开”等于没说）
 	if touch_controls != null and touch_controls.is_shown():
-		fail_label.text = "坠落！方块掉出了棋盘"
+		fail_label.text = "坠落！方块掉出了棋盘　·　点右下「重开」"
 	else:
 		fail_label.text = "坠落！方块掉出了棋盘　（按 R 重开）"
 	fail_label.visible = true
@@ -469,11 +723,15 @@ func _on_fell() -> void:
 func _update_hud() -> void:
 	if levels.is_empty():
 		return
-	level_label.text = "第 %d 关　·　%d / %d" % [current_index + 1, current_index + 1, levels.size()]
-	if game.is_sliding():
-		level_label.text += "　·　冰面"
+	var done: int = progress.completed_count() if progress != null else 0
+	if _hud_narrow:
+		level_label.text = "第 %d 关　%d/%d" % [current_index + 1, done, levels.size()]
+	else:
+		level_label.text = "第 %d 关　·　已通关 %d / %d" % [current_index + 1, done, levels.size()]
 	progress_bar.max_value = float(levels.size())
-	progress_bar.value = float(current_index + 1)
+	# 进度条表示**整体通关进度**，而不是“当前第几关”：
+	# 跳到第 18 关时看到 18/20 会让人误以为快通关了，实际上只通了 3 关。
+	progress_bar.value = float(done)
 	moves_label.text = "步数  %d" % game.move_count
 
 	# 最佳 / 参考步数：给「刷分」提供明确目标
@@ -492,10 +750,13 @@ func _update_hud() -> void:
 	best_label.text = "　·　".join(parts) if parts.size() > 0 else "　"
 
 
-func _do_move(d: Vector3i) -> void:
-	# 统一入口：记录本局移动（用于 Replay）后再交给 Game
+func _do_move(d: Vector3i) -> bool:
+	# 统一入口：记录本局移动（用于 Replay）后再交给 Game。
+	# 返回是否真的走成了（手势提示要靠它判断“玩家学会了”）。
 	if game.try_move(d):
 		_run_moves.append(Moves.direction_label(d))
+		return true
+	return false
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -595,7 +856,7 @@ func _setup_light() -> void:
 	light.rotation_degrees = Vector3(-52.0, -38.0, 0.0)
 	light.light_energy = LIGHT_ENERGY * 1.15
 	light.light_color = Color(1.0, 0.96, 0.90)  # 略暖，画面不生硬
-	light.shadow_enabled = not lite_mode  # 方块在瓦片上投影 → 立体感（lite 模式关闭）
+	light.shadow_enabled = RenderQuality.shadows(_quality_tier)  # 由自适应画质控制
 	light.directional_shadow_max_distance = 40.0
 	add_child(light)
 
@@ -616,9 +877,10 @@ func _setup_environment() -> void:
 
 
 func _setup_backdrop() -> void:
-	# 挂在相机前的渐变幕布（充当天空）：比纯色背景自然得多，且全渲染后端可用
-	if lite_mode:
-		return
+	# 挂在相机前的渐变幕布（充当天空）：比纯色背景自然得多，且全渲染后端可用。
+	# 说明：gl_compatibility 下 Environment.BG_SKY / ProceduralSkyMaterial 不渲染，
+	# 所以用一个对着相机的 quad + 渐变着色器来充当天空。
+	# 是否显示由自适应画质档位决定（见 _apply_render_quality）。
 	var sh := Shader.new()
 	sh.code = """
 shader_type spatial;
@@ -630,6 +892,9 @@ void fragment() {
 	vec3 c = UV.y < 0.62
 		? mix(top_color, mid_color, UV.y / 0.62)
 		: mix(mid_color, bottom_color, (UV.y - 0.62) / 0.38);
+	// 径向暗角：视线自然聚焦到画面中心（棋盘），边缘不抢戏
+	float v = distance(UV, vec2(0.5)) * 1.35;
+	c *= mix(1.0, 0.78, smoothstep(0.45, 1.05, v));
 	ALBEDO = c;
 }
 """
@@ -642,8 +907,10 @@ void fragment() {
 	mi.mesh = quad
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.visible = RenderQuality.backdrop(_quality_tier)
 	cam.add_child(mi)
 	mi.position = Vector3(0.0, 0.0, -300.0)
+	backdrop = mi
 
 
 func _setup_hud() -> void:
@@ -654,12 +921,13 @@ func _setup_hud() -> void:
 
 	# ── 左上：关卡 + 进度条 ────────────────────────────
 	var left := _make_panel(hud)
+	left_panel = left
 	left.anchor_left = 0.0
 	left.anchor_top = 0.0
 	left.offset_left = 22.0
 	left.offset_top = 20.0
-	left.offset_right = 22.0 + 208.0
-	left.offset_bottom = 20.0 + 74.0
+	left.offset_right = 22.0 + LEFT_PANEL_W
+	left.offset_bottom = 20.0 + 78.0
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 9)
 	level_label = Label.new()
@@ -683,12 +951,13 @@ func _setup_hud() -> void:
 
 	# ── 右上：步数 ──────────────────────────────────
 	var right := _make_panel(hud)
+	right_panel = right
 	right.anchor_left = 1.0
 	right.anchor_right = 1.0
-	right.offset_left = -22.0 - 190.0
+	right.offset_left = -22.0 - RIGHT_PANEL_W
 	right.offset_right = -22.0
 	right.offset_top = 20.0
-	right.offset_bottom = 20.0 + 74.0
+	right.offset_bottom = 20.0 + 78.0
 	var rcol := VBoxContainer.new()
 	rcol.add_theme_constant_override("separation", 3)
 	moves_label = Label.new()

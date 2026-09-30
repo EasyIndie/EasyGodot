@@ -1,8 +1,8 @@
 {
-	"difficulty": "easy",
+	"difficulty": "medium",
 	"goal": [
 		[
-			2,
+			1,
 			1
 		]
 	],
@@ -13,41 +13,29 @@
 	"holes": [
 		[
 			0,
+			5
+		],
+		[
+			1,
 			0
 		],
 		[
-			0,
-			2
-		],
-		[
-			1,
-			2
-		],
-		[
-			1,
+			2,
 			3
 		],
 		[
-			3,
-			4
-		],
-		[
-			4,
-			0
-		],
-		[
-			4,
-			2
+			5,
+			1
 		]
 	],
 	"id": "level_04",
-	"optimal_moves": 4,
+	"optimal_moves": 5,
 	"start": {
-		"orientation": "standing",
+		"orientation": "lying_z",
 		"position": [
-			5,
 			0,
-			4
+			0,
+			3
 		],
 		"shape": "domino"
 	}

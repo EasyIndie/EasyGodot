@@ -5,7 +5,8 @@
 #     "grid": {"x": 8, "z": 8},
 #     "holes": [[x,z], ...],
 #     "goal":  [[x,z], ...],
-#     "start": {"shape": "domino", "orientation": "standing"|int, "position": [x,y,z]}
+#     "start": {"shape": "domino", "orientation": "standing"|int, "position": [x,y,z]},
+#     "optimal_moves": 7, "difficulty": "medium"   ← 由 build_level_set 写入的缓存元数据
 #   }
 extends RefCounted
 
@@ -50,17 +51,4 @@ static func load_dict(data: Dictionary) -> Dictionary:
 	var grid: Dictionary = data.get("grid", {"x": 8, "z": 8})
 	var board = Board.new(str(data.get("id", "")), int(grid.get("x", 8)), int(grid.get("z", 8)), holes, goal)
 
-	# 机关（可选）：目前支持 ice（冰面打滑）
-	var mech: Dictionary = {}
-	var mech_id: String = str(data.get("mechanic", ""))
-	if mech_id == "ice":
-		# 冰面要求单格形状：多格形状“滑动”的语义不成立（比如骨牌打滑该怎算？）
-		if shape.cells.size() != 1:
-			return {"error": "mechanic_needs_single_cell", "mechanic": mech_id, "shape": shape.id}
-		mech = {"move": "ice"}
-	elif mech_id != "":
-		return {"error": "unknown_mechanic", "mechanic": mech_id}
-
-	var start = State.new(shape, orientation, position, mech)
-
-	return {"board": board, "start": start}
+	return {"board": board, "start": State.new(shape, orientation, position)}

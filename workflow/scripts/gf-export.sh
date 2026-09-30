@@ -29,6 +29,8 @@ for p in "${PLATFORMS[@]}"; do
 		web)
 			mkdir -p "$PROJECT/build/web"
 			echo "=== 导出 Web ==="
+			# 先把 head_include 源文件同步进 export_presets.cfg（见 gf-web-inject.sh 的说明）
+			"$SCRIPT_DIR/gf-web-inject.sh" "$PROJECT"
 			"$GODOT" --headless --no-header --path "$PROJECT" --export-release "Web" "build/web/index.html"
 			# 附带静态辅助页（如 WebGL 诊断页）到站点根目录，随 Pages 一起发布
 			if [ -d "$SCRIPT_DIR/../web" ]; then

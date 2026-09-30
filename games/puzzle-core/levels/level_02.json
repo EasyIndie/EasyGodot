@@ -2,8 +2,8 @@
 	"difficulty": "easy",
 	"goal": [
 		[
-			4,
-			0
+			3,
+			2
 		]
 	],
 	"grid": {
@@ -12,9 +12,9 @@
 	},
 	"holes": [],
 	"id": "level_02",
-	"optimal_moves": 4,
+	"optimal_moves": 3,
 	"start": {
-		"orientation": "lying_z",
+		"orientation": "standing",
 		"position": [
 			4,
 			0,

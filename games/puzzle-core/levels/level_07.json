@@ -2,32 +2,56 @@
 	"difficulty": "medium",
 	"goal": [
 		[
-			2,
-			0
+			3,
+			4
 		]
 	],
 	"grid": {
-		"x": 7,
+		"x": 8,
 		"z": 7
 	},
 	"holes": [
 		[
-			2,
+			0,
+			3
+		],
+		[
+			0,
 			5
 		],
 		[
-			6,
+			0,
+			6
+		],
+		[
+			1,
 			0
+		],
+		[
+			1,
+			5
+		],
+		[
+			4,
+			3
+		],
+		[
+			5,
+			4
+		],
+		[
+			6,
+			2
 		]
 	],
 	"id": "level_07",
-	"optimal_moves": 7,
+	"optimal_moves": 6,
 	"start": {
 		"orientation": "lying_z",
 		"position": [
 			1,
 			0,
-			5
+			1
 		],
 		"shape": "domino"
 	}

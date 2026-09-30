@@ -4,13 +4,13 @@
 extends RefCounted
 
 const Validate = preload("res://solver/validate.gd")
+const Shapes = preload("res://core/shapes.gd")
 
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
 
 func generate(seed: int, grid_x: int, grid_z: int, hole_density: float,
-		difficulty: String, count: int, min_moves: int, shape_id: String = "domino",
-		mechanic: String = "") -> Dictionary:
+		difficulty: String, count: int, min_moves: int, shape_id: String = "domino") -> Dictionary:
 	rng.seed = seed
 	var levels: Array = []
 	var details: Array = []
@@ -23,7 +23,7 @@ func generate(seed: int, grid_x: int, grid_z: int, hole_density: float,
 
 	while levels.size() < count and stats["attempts"] < max_attempts:
 		stats["attempts"] += 1
-		var data: Dictionary = _generate_one(grid_x, grid_z, hole_density, shape_id, mechanic)
+		var data: Dictionary = _generate_one(grid_x, grid_z, hole_density, shape_id)
 		data["id"] = "gen_%d_%03d" % [seed, seq]
 
 		var r: Dictionary = Validate.validate_dict(data)
@@ -52,8 +52,7 @@ func generate(seed: int, grid_x: int, grid_z: int, hole_density: float,
 	return {"levels": levels, "details": details, "stats": stats}
 
 
-func _generate_one(grid_x: int, grid_z: int, hole_density: float, shape_id: String = "domino",
-		mechanic: String = "") -> Dictionary:
+func _generate_one(grid_x: int, grid_z: int, hole_density: float, shape_id: String = "domino") -> Dictionary:
 	var holes_v: Array = []  # Array[Vector2i]
 	for x in range(grid_x):
 		for z in range(grid_z):
@@ -61,26 +60,23 @@ func _generate_one(grid_x: int, grid_z: int, hole_density: float, shape_id: Stri
 				holes_v.append(Vector2i(x, z))
 
 	var start_v: Vector2i = _random_solid(grid_x, grid_z, holes_v, [])
-	# 单格形状（cube）所有姿态等价；domino 随机取一种起始姿态（竖立/沿 X 横躺/沿 Z 横躺）
-	var orientation: String = "standing"
-	if shape_id != "cube":
-		var orientations: Array = ["standing", "lying_x", "lying_z"]
-		orientation = orientations[rng.randi_range(0, 2)]
+	# 起始姿态由形状自己的方向表决定（避免在这里写 `if shape == xxx` 这类分支）
+	var orient_names: Array = Shapes.orientation_names(shape_id)
+	var orientation: Variant = 0
+	if orient_names.size() > 0:
+		orientation = orient_names[rng.randi_range(0, orient_names.size() - 1)]
 	var goal_v: Vector2i = _random_solid(grid_x, grid_z, holes_v, [start_v])
 
 	var holes_arr: Array = []
 	for h in holes_v:
 		holes_arr.append([h.x, h.y])
 
-	var out: Dictionary = {
+	return {
 		"grid": {"x": grid_x, "z": grid_z},
 		"holes": holes_arr,
 		"goal": [[goal_v.x, goal_v.y]],
 		"start": {"shape": shape_id, "orientation": orientation, "position": [start_v.x, 0, start_v.y]},
 	}
-	if mechanic != "":
-		out["mechanic"] = mechanic
-	return out
 
 
 func _random_solid(grid_x: int, grid_z: int, holes: Array, exclude: Array) -> Vector2i:

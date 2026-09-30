@@ -62,20 +62,17 @@ func solve() -> Dictionary:
 		"reachable_states": visited.size(),
 		"optimal_moves": depth[gk],
 		"solution": path,
-		"difficulty": grade(depth[gk], visited.size(), str(goal_state.mechanism.get("move", ""))),
+		"difficulty": grade(depth[gk], visited.size()),
 	}
 
 
-static func grade(optimal_moves: int, reachable_states: int, mechanic: String = "") -> String:
-	# 难度分级：以最优步数为主要依据（阈值可调）。
-	# reachable_states 作为复杂度补充指标单独上报，不参与本分级。
+static func grade(optimal_moves: int, reachable_states: int) -> String:
+	# 难度分级：以最优步数为主。
+	# reachable_states（可达状态数）作为复杂度指标单独上报，不参与本分级——
+	# 它跟盘面大小强相关，对玩家的实际难度贡献远不如“最少几步”。
 	if optimal_moves < 0:
 		return "unsolvable"
 	var m: int = optimal_moves
-	if mechanic == "ice":
-		# 冰面上一次移动 = 连续翻滚好几格，玩家真正做的是「选方向」而非「走一步」，
-		# 决策密度远高于普通关卡，难度不能按步数直接比 —— 这里做保守折算。
-		m = optimal_moves * 3
 	if m <= 4:
 		return "easy"
 	if m <= 9:

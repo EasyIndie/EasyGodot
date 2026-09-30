@@ -7,6 +7,8 @@
 # 与具体玩法无关：只依赖 Progress 的 runs()/best_moves() 与关卡元数据 entries。
 extends RefCounted
 
+const Shapes = preload("res://core/shapes.gd")
+
 const MAX_SHOWN := 5
 
 
@@ -63,12 +65,7 @@ static func detail_text(entries: Array, progress, index: int) -> String:
 		return ""
 	var e: Dictionary = entries[index]
 	var parts: Array = ["第 %02d 关" % (index + 1)]
-	if str(e.get("mechanic", "")) == "ice":
-		parts.append("冰块")
-	elif str(e.get("shape", "")) == "cube":
-		parts.append("方块")
-	else:
-		parts.append("骨牌")
+	parts.append(Shapes.display_name(str(e.get("shape", "domino"))))
 	var optimal: int = int(e.get("optimal", -1))
 	if optimal > 0:
 		parts.append("参考 %d 步" % optimal)

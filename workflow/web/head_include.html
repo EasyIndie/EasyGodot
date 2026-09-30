@@ -1,0 +1,175 @@
+<!--
+  head_include.html — 注入到 Godot 导出的 index.html <head> 里的一段 CSS + JS。
+  由 workflow/scripts/gf-web-inject.sh 写进 export_presets.cfg 的 html/head_include，
+  这样这段代码是**可读、可 diff、可维护**的源文件，而不是塞在一行里的转义字符串。
+
+  它解决三件事：
+    1) 画布贴合“可见视口” + 尊重安全区域（刘海 / 灵动岛 / 底部手势条）
+    2) 渲染分辨率按设备分级给预算 —— 既要高清，又不能把 GPU 撑死
+    3) 移动端原生手势（滚动/缩放/长按菜单）不要和游戏的滑动操作打架
+-->
+<style>
+  /* 画布高度用 100dvh（动态视口高度）而不是 100vh：
+     iOS Safari 的 100vh 会把底部工具栏算进去，导致底部按钮被工具栏压住、
+     玩家“界面显示不全”。dvh 不支持时这条规则会被忽略，退回模板的 100%（优雅降级）。 */
+  html, body {
+    height: 100dvh !important;
+    margin: 0;
+    overflow: hidden;
+    overscroll-behavior: none;
+    background: #0b0f18 !important;
+  }
+  body {
+    /* 触摸设备上禁掉浏览器自带手势，滑动只交给游戏 */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #canvas {
+    touch-action: none;
+    display: block;
+  }
+  .gf-noscroll { position: fixed; inset: 0; }
+</style>
+<script>
+(function () {
+  "use strict";
+  var q = window.location.search || "";
+  function flag(name) { return q.indexOf(name + "=1") >= 0; }
+  function num(name) {
+    var m = q.match(new RegExp("[?&]" + name + "=([0-9.]+)"));
+    return m ? parseFloat(m[1]) : null;
+  }
+
+  /* ── 1) 安全区域 ───────────────────────────────────────────────────────
+     viewport-fit=cover 之后 env(safe-area-inset-*) 才有意义。
+     加了 cover，页面会铺到刘海下面，所以**必须**把 inset 交给 UI 去避让；
+     这里把 inset 读出来给 Godot（main.gd 每帧只读一次，变化时才更新）。 */
+  function patchViewport() {
+    try {
+      var mv = document.querySelector('meta[name="viewport"]');
+      if (mv && mv.getAttribute("content").indexOf("viewport-fit") < 0) {
+        mv.setAttribute("content", mv.getAttribute("content") + ", viewport-fit=cover");
+      }
+    } catch (e) {}
+  }
+  patchViewport();   // head_include 注在 Godot 的 viewport meta 之后，这里能立刻生效
+  document.addEventListener("DOMContentLoaded", patchViewport);   // 兜底
+
+  window.gfSafeInsets = function () {
+    try {
+      var d = document.createElement("div");
+      d.style.cssText = "position:fixed;left:0;top:0;visibility:hidden;pointer-events:none;" +
+        "padding:env(safe-area-inset-top) env(safe-area-inset-right) " +
+        "env(safe-area-inset-bottom) env(safe-area-inset-left);";
+      document.body.appendChild(d);
+      var cs = getComputedStyle(d);
+      var r = {
+        top: parseFloat(cs.paddingTop) || 0,
+        right: parseFloat(cs.paddingRight) || 0,
+        bottom: parseFloat(cs.paddingBottom) || 0,
+        left: parseFloat(cs.paddingLeft) || 0
+      };
+      d.remove();
+      return JSON.stringify(r);
+    } catch (e) {
+      return '{"top":0,"right":0,"bottom":0,"left":0}';
+    }
+  };
+
+  /* ── 2) 渲染分辨率：高清 vs “别把 GPU 撑死” ───────────────────────────
+     早期版本无条件把总像素钳到 1.6M —— 在 Retina 屏上等于「先渲染小图再放大」，
+     所以画面发虚（当时是为了绕开 Safari 丢上下文，而真正的元凶其实是默认
+     4096×4096 的方向光阴影贴图，已修）。
+     现在按设备分级给像素预算，并且底线是 1.0：**任何设备都不会比 CSS 分辨率更模糊**。
+     小窗口反而会超采样（ratio 可达 2.0），于是“不同屏幕尺寸都能保持清晰”。
+
+     URL 开关（排障用）：
+       ?px=2.5   总像素预算（百万像素）
+       ?dpr=1.5  devicePixelRatio 上限
+       ?lite=1   低端 GPU 档（同时会关阴影/渐变幕布，见 main.gd） */
+  var touch = ("ontouchstart" in window) || (navigator.maxTouchPoints > 0);
+  var budget = touch ? 3.0e6 : 4.2e6;
+  if (flag("lite")) budget = 1.4e6;
+  var pxOverride = num("px");
+  if (pxOverride) budget = pxOverride * 1e6;
+  var maxRatio = num("dpr") || 2.0;
+  var HARD_MAX = 6.0e6;   // 极端大窗口下的硬上限，避免帧缓冲大到 GPU 取不回上下文
+  var rawDPR = window.devicePixelRatio || 1;
+
+  function ratio() {
+    var a = Math.max(window.innerWidth * window.innerHeight, 1);
+    var r = Math.min(rawDPR, maxRatio, Math.sqrt(budget / a));
+    if (r < 1.0) {
+      // 只有窗口大到超过 HARD_MAX 时才允许低于 1.0
+      r = Math.max(r, Math.min(1.0, Math.sqrt(HARD_MAX / a)));
+    }
+    return r;
+  }
+
+  try {
+    Object.defineProperty(window, "devicePixelRatio", { configurable: true, get: ratio });
+  } catch (e) {}
+
+  function patchGD() {
+    var g = window.GodotDisplayScreen;
+    if (g && !g.__gfClamped) {
+      g.__gfClamped = true;
+      g.getPixelRatio = ratio;   // 双保险：Godot 直接问它要像素比
+      try { window.dispatchEvent(new Event("resize")); } catch (e) {}
+    }
+  }
+  document.addEventListener("DOMContentLoaded", patchGD);
+  window.addEventListener("load", patchGD);
+  for (var i = 0; i < 8; i++) { setTimeout(patchGD, i * 200); }
+  window.addEventListener("resize", patchGD);
+
+  /* ── 3) 诊断面板（供 WebGL 排障，仅在对局失败时显示）───────────────── */
+  function diag() {
+    var c = document.getElementById("canvas") || {};
+    var px = ((c.width || 0) * (c.height || 0)) / 1e6;
+    var d = [
+      "canvas 绘图缓冲 : " + (c.width || "?") + " x " + (c.height || "?") + "  (" + px.toFixed(2) + "M px)",
+      "devicePixelRatio: " + rawDPR + "  -> 实际 " + ratio().toFixed(2),
+      "窗口(CSS)      : " + window.innerWidth + " x " + window.innerHeight,
+      "屏幕           : " + screen.width + " x " + screen.height,
+      "安全区域(px)   : " + window.gfSafeInsets(),
+      "存活时长       : " + (performance.now() / 1000).toFixed(1) + " s",
+    ];
+    try {
+      var t = document.createElement("canvas").getContext("webgl2");
+      if (t) {
+        var dbg = t.getExtension("WEBGL_debug_renderer_info");
+        d.push("新开 WebGL2    : " + (t.isContextLost() ? "已丢失（GPU 进程整体异常）" : "可用"));
+        d.push("renderer       : " + (dbg ? t.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : t.getParameter(t.RENDERER)));
+        d.push("MAX_RENDERBUFFER_SIZE: " + t.getParameter(t.MAX_RENDERBUFFER_SIZE));
+      } else {
+        d.push("新开 WebGL2    : 拿不到上下文（已达上限或是能力问题）");
+      }
+    } catch (e) { d.push("WebGL2 探测异常: " + e); }
+    return d.join("\n");
+  }
+
+  function showDiag() {
+    var el = document.getElementById("status-notice");
+    if (!el) { return; }
+    if (!document.getElementById("gf-diag")) {
+      var pre = document.createElement("pre");
+      pre.id = "gf-diag";
+      pre.style.cssText = "user-select:all;-webkit-user-select:all;background:#131a28;" +
+        "border:1px solid #263149;border-radius:8px;padding:10px 12px;margin:10px 0;" +
+        "text-align:left;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;" +
+        "color:#aab6d0;white-space:pre-wrap;word-break:break-word";
+      el.parentNode.insertBefore(pre, el.nextSibling);
+    }
+    var box = document.getElementById("gf-diag");
+    box.textContent = diag() + "\n\n若画面异常，可在网址后加 ?lite=1 关闭阴影与特效再试。";
+  }
+  window.addEventListener("error", function (ev) {
+    var m = String((ev && ev.message) || "");
+    if (m.indexOf("WebGL") >= 0 || m.indexOf("context") >= 0) { setTimeout(showDiag, 300); }
+  });
+  if (window.Godot && window.Godot.runtime) { /* 无操作：仅保持时序明确 */ }
+})();
+</script>

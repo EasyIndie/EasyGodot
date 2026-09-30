@@ -11,6 +11,7 @@ extends CanvasLayer
 
 const Leaderboard = preload("res://meta/leaderboard.gd")
 const UiLayout = preload("res://meta/ui_layout.gd")
+const Shapes = preload("res://core/shapes.gd")
 
 signal level_chosen(index: int)
 signal closed
@@ -37,6 +38,9 @@ var _grid: GridContainer
 var _title: Label
 var _subtitle: Label
 var _detail: Label
+# 安全区域（刘海 / 灵动岛 / 底部手势条）：由 main.gd 注入，_apply_layout 负责避让
+var _insets: Dictionary = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
+var _margin: MarginContainer = null
 var _hint: Label
 var _reset_btn: Button
 var _back_btn: Button
@@ -56,10 +60,18 @@ func _ready() -> void:
 	shade.mouse_filter = Control.MOUSE_FILTER_STOP
 	add_child(shade)
 
+	# 外层 MarginContainer 负责避开安全区，内层 CenterContainer 负责居中 ——
+	# 分两层是因为「居中」和「留边」是两个正交的约束，混在一起会互相打架。
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_margin = margin
+	add_child(margin)
+
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(center)
+	margin.add_child(center)
 
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 10)
@@ -254,9 +266,25 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 	return b
 
 
+func set_safe_insets(insets: Dictionary) -> void:
+	# 由 main.gd 注入；选关界面同样必须避开刘海/底部手势条
+	_insets = insets
+	_apply_layout()
+
+
+func safe_insets() -> Dictionary:
+	return _insets.duplicate()
+
+
 func _apply_layout() -> void:
 	# 按视口自适应：列数随宽度降级、卡片与字号按可用宽度反算（窄屏/竖屏不溢出）
 	var vp: Vector2 = get_viewport().get_visible_rect().size
+	# 避开安全区：把 inset 转成内容边距，而不是把控件硬挪（否则会与居中布局打架）
+	if _margin != null:
+		_margin.add_theme_constant_override("margin_left", int(float(_insets.get("left", 0.0))))
+		_margin.add_theme_constant_override("margin_right", int(float(_insets.get("right", 0.0))))
+		_margin.add_theme_constant_override("margin_top", int(float(_insets.get("top", 0.0))))
+		_margin.add_theme_constant_override("margin_bottom", int(float(_insets.get("bottom", 0.0))))
 	var g: Dictionary = UiLayout.level_grid(vp, maxi(_entries.size(), 1))
 	_grid.columns = int(g["columns"])
 	var card: Vector2 = g["card"]

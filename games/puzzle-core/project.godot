@@ -15,6 +15,18 @@ run/main_scene="res://scenes/main.tscn"
 
 window/size/viewport_width=1280
 window/size/viewport_height=720
+; 拉伸模式显式设为 disabled —— 这是**有意为之**，不要“顺手修好”：
+;
+;   * 视口尺寸 = 窗口尺寸(CSS px)，3D 渲染目标 = 窗口尺寸 × devicePixelRatio，
+;     于是 Retina / 高 DPI 屏上 3D 是原生分辨率渲染（清晰），而不是把固定分辨率
+;     的画面放大（发虚）。
+;   * UI 用 CSS px 布局，和系统字体、触摸目标尺寸同一套单位：
+;     一个 132px 的按钮在手机和 4K 显示器上**物理大小一致**，
+;     这正是“不同设备保持相同显示质量”的含义。
+;   * 若改成 canvas_items 拉伸，UI 会按虚拟分辨率缩放，触摸目标在手机上会偏小、
+;     在 4K 上会偏大，反而破坏一致性。像素比由 Web 端的 DPR 预算控制
+;     （workflow/web/head_include.html），原生平台由系统 DPI 缩放处理。
+window/stretch/mode="disabled"
 
 [gui]
 
@@ -26,17 +38,25 @@ theme/custom_font="res://fonts/NotoSansSC-Regular.otf"
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
 
-; ── Web / 移动端 GPU 预算很紧（Safari 尤其）——以下是实测踩坑后的显式限定 ──
+; ── 画质与 GPU 预算 ─────────────────────────────────────────────────
 ;
-; 1) 关掉 MSAA：多重采样帧缓冲在受限 GPU 上代价很高
-anti_aliasing/quality/msaa_3d=0
+; 1) MSAA 3D：这里是 4x。抗锯齿对“看起来精细”贡献极大（斜边不再有阶梯），
+;    而 gl_compatibility 下的多重采样帧缓冲代价可控。
+;    运行时会由 meta/render_quality.gd 按实测帧时间自适应降级
+;    （4x → 2x → 关），所以弱设备不会因此卡死。
+anti_aliasing/quality/msaa_3d=2
+; 2D 不做多重采样：HUD 只有圆角面板和文字，文字本身是距离场渲染，不缺这一项。
 anti_aliasing/quality/msaa_2d=0
 ;
-; 2) 方向光阴影默认 4096×4096 = 1680 万像素，比整个画面（我们钐制在 160 万）还大 10 倍！
-;    这是 GPU 内存被吃穿、上下文被 Safari 回收的直接原因之一。降到 1024（约 100 万像素）。
+; 2) 方向光阴影贴图：默认 4096×4096 = 1680 万像素，比整个画面（Web 端约 300-400 万）
+;    还大好几倍。这正是之前 Safari “WebGL context lost” 的元凶（GPU 内存被吃穿、
+;    上下文被回收）。降到 1024（约 100 万像素），阴影依然干净。
 lights_and_shadows/directional_shadow/size=1024
-lights_and_shadows/directional_shadow/size.mobile=512
-lights_and_shadows/directional_shadow/soft_shadow_filter_quality=0
+lights_and_shadows/directional_shadow/size.mobile=1024
+lights_and_shadows/directional_shadow/soft_shadow_filter_quality=1
 ;
 ; 3) 本作没有位置光源，但把图集尺寸一并压低，避免默认值被意外分配
 lights_and_shadows/positional_shadow/atlas_size=1024
+;
+; 4) 纹理：本作是纯色材质 + 程序化渐变，没有需要 mipmap 的贴图；
+;    保持默认（线性过滤）即可，不额外开关。

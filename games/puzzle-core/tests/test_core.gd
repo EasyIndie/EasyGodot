@@ -21,9 +21,7 @@ func _init() -> void:
 	_test_rotations()
 	_test_shape_normalization()
 	_test_domino_rolls()
-	_test_cube_rolls()
-	_test_cube_orientation_descriptors()
-	_test_ice_mechanic()
+	_test_shape_registry()
 	_test_reversibility()
 	_test_board_and_goal()
 	_test_level_loader()
@@ -131,90 +129,50 @@ func _test_domino_rolls() -> void:
 	_eq_cells(_apply_roll(lz, Vector3i(-1, 0, 0)), _cells([[-1, 0, 0], [-1, 0, 1]]), "lying_z -x（侧移）")
 
 
-func _test_cube_rolls() -> void:
-	var cu = _make_state("cube", 0, [0, 0, 0])
-	_eq_cells(_apply_roll(cu, Vector3i(1, 0, 0)), _cells([[1, 0, 0]]), "cube +x")
-	_eq_cells(_apply_roll(cu, Vector3i(-1, 0, 0)), _cells([[-1, 0, 0]]), "cube -x")
-	_eq_cells(_apply_roll(cu, Vector3i(0, 0, 1)), _cells([[0, 0, 1]]), "cube +z")
-	_eq_cells(_apply_roll(cu, Vector3i(0, 0, -1)), _cells([[0, 0, -1]]), "cube -z")
+func _test_shape_registry() -> void:
+	# 形状是**数据登记**出来的（shapes.gd 的 REGISTRY / ORIENTATIONS），
+	# 所以这里既验证“能用的形状确实能用”，也验证“删掉的形状确实不存在”。
+	#
+	# 历史：cube 曾经注册过，但单格方块在平面棋盘上没有姿态约束，
+	# 只能一条直线走到目标，玩起来“点几下就通关”（后来的冰面补丁更糟：一滑就坠落）。
+	# 最终整个移除，并留下这条断言——防止它（或任何死形状）被悄悄加回来。
+	check(Shapes.get_shape("cube") == null, "已移除的 cube 形状不应存在")
+	check(Shapes.get_shape("nonsense") == null, "未知形状应返回 null")
+	check(Shapes.ids().has("domino"), "domino 应已注册")
+	check(Shapes.display_name("domino") != "", "形状应有玩家可见名字")
+	check(Shapes.display_name("nonsense") == "nonsense", "未知形状的名字应原样回退")
 
-
-func _test_cube_orientation_descriptors() -> void:
-	# cube 是单格形状：所有语义方向描述符都应解析到 identity(0)，而不是报错
-	var cu = Shapes.get_shape("cube")
-	for desc in ["standing", "lying_x", "lying_z"]:
-		check(Shapes.resolve_orientation(cu, desc) == 0, "cube 的 %s 应解析为 0" % desc)
-	check(Shapes.resolve_orientation(cu, 7) == 7, "整数方向应原样返回")
-
-	# 加载器应接受带语义描述符的 cube 关卡（此前会报 bad_orientation）
-	var lv: Dictionary = Loader.load_dict({
-		"id": "cube_lv", "grid": {"x": 4, "z": 4}, "holes": [], "goal": [[3, 3]],
-		"start": {"shape": "cube", "orientation": "standing", "position": [0, 0, 0]},
-	})
-	check(not lv.has("error"), "cube 关卡应能加载: " + str(lv))
-	if not lv.has("error"):
-		_eq_cells(lv["start"].world_cells(), _cells([[0, 0, 0]]), "cube 起点应只占 1 格")
-
-	# 多格形状仍应真区分方向（不能因单格特判而误伤）
+	# 语义化方向：三个方向必须**互不相同**（曾经对单格形状做特判，全部折叠成 0，
+	# 那种特判很危险——一旦有新形状依赖它就会悄悄错掉）
 	var d = Shapes.get_shape("domino")
-	check(Shapes.resolve_orientation(d, "standing") != Shapes.resolve_orientation(d, "lying_x"), "domino 的竖立与横躺应是不同方向")
-	check(Shapes.resolve_orientation(d, "nonsense") == -1, "domino 的非法描述符仍应报错")
+	var ox: int = Shapes.resolve_orientation(d, "lying_x")
+	var oz: int = Shapes.resolve_orientation(d, "lying_z")
+	var st: int = Shapes.resolve_orientation(d, "standing")
+	check(ox >= 0 and oz >= 0 and st >= 0, "三个语义方向都应能解析")
+	check(ox != oz and ox != st and oz != st, "横躺 X / 横躺 Z / 竖立应是不同方向")
+	check(Shapes.resolve_orientation(d, 7) == 7, "整数方向应原样返回")
+	check(Shapes.resolve_orientation(d, "nonsense") == -1, "非法描述符应返回 -1")
+	check(Shapes.orientation_names("domino").size() == 3, "方向表应有 3 个名字")
+	check(Shapes.orientation_names("nonsense").is_empty(), "未知形状没有方向名")
 
+	# 方向描述符解析出来的索引，必须真的对应那组单元
+	var st_cells: Array = d.oriented_cells(st)
+	check(st_cells.has(Vector3i(0, 1, 0)), "竖立方向应含竖直方向的第二格")
 
-func _test_ice_mechanic() -> void:
-	# 冰面机制：一次移动 = 连续翻滚到「再滚一格就踩空」为止。
-	# 设计取舍：不引入累积状态 → 规范键/求解器/状态空间都不用变。
-	var data: Dictionary = {
-		"id": "ice", "grid": {"x": 5, "z": 5}, "mechanic": "ice",
-		"holes": [[2, 2], [2, 4]], "goal": [[4, 0]],
-		"start": {"shape": "cube", "orientation": "standing", "position": [0, 0, 4]},
-	}
-	var lv: Dictionary = Loader.load_dict(data)
-	check(not lv.has("error"), "冰面 cube 关卡应能加载: " + str(lv))
-	if lv.has("error"):
-		return
-	var b = lv["board"]
-	var st = lv["start"]
-	check(str(st.mechanism.get("move", "")) == "ice", "机关应写进状态")
+	# 加载器对未知形状 / 非法方向都要报错，而不是静默兜底
+	check(str(Loader.load_dict({
+		"grid": {"x": 4, "z": 4}, "goal": [[3, 3]],
+		"start": {"shape": "cube", "orientation": "standing", "position": [0, 0, 0]},
+	}).get("error", "")) == "unknown_shape", "未知形状应报 unknown_shape")
+	check(str(Loader.load_dict({
+		"grid": {"x": 4, "z": 4}, "goal": [[3, 3]],
+		"start": {"shape": "domino", "orientation": "nonsense", "position": [0, 0, 0]},
+	}).get("error", "")) == "bad_orientation", "非法方向应报 bad_orientation")
 
-	# 向 +x 滑：(1,4) 实心、(2,4) 是洞 → 只能滑 1 格就停
-	var p1: Array = Core.slide_path(b, st, Vector3i(1, 0, 0))
-	check(p1.size() == 1, "碰到洞前应只滑 1 格，got=%d" % p1.size())
-	# 向 -x 滑：x=-1 越界 → 第一步就踩空
-	check(Core.slide_path(b, st, Vector3i(-1, 0, 0)).is_empty(), "第一步越界应无可滑路径")
-	# 向 +z 滑：(0,4)→(0,0) 一路实心，应滑满 4 格
-	check(Core.slide_path(b, st, Vector3i(0, 0, -1)).size() == 4, "无阻挡方向应一路滑到底")
-
-	# apply_move_on 应直接落到滑动终点（一步到位，而不是只走一格）
-	var ns = Core.apply_move_on(b, st, Vector3i(0, 0, -1))
-	check(ns != null, "滑动应合法")
-	if ns != null:
-		_eq_cells(ns.world_cells(), _cells([[0, 0, 0]]), "冰面移动应滑到终点而不是只走一格")
-	# 第一步就踩空 → null（与边缘掉落语义一致）
-	check(Core.apply_move_on(b, st, Vector3i(-1, 0, 0)) == null, "第一步踩空应返回 null")
-
-	# 同盘去掉机关 → 一次只走一格（对照）
-	var plain: Dictionary = data.duplicate(true)
-	plain.erase("mechanic")
-	var lv2: Dictionary = Loader.load_dict(plain)
-	var ns2 = Core.apply_move_on(lv2["board"], lv2["start"], Vector3i(0, 0, -1))
-	check(ns2 != null and ns2.position == Vector3i(0, 0, 3), "无冰面时一次只走一格")
-
-	# 冰面要求单格形状
-	var dom: Dictionary = data.duplicate(true)
-	dom["start"] = {"shape": "domino", "orientation": "standing", "position": [0, 0, 4]}
-	check(str(Loader.load_dict(dom).get("error", "")) == "mechanic_needs_single_cell",
-		"冰面 + 多格形状应被拒绝")
-	# 未知机关应报错，而不是静默忽略
-	var unk: Dictionary = data.duplicate(true)
-	unk["mechanic"] = "nope"
-	check(str(Loader.load_dict(unk).get("error", "")) == "unknown_mechanic", "未知机关应报错")
-
-	# 机关状态必须参与规范键：否则位置相同、机关不同的状态会被错误合并
-	var cu = Shapes.get_shape("cube")
-	var s_a = State.new(cu, 0, Vector3i(0, 0, 0), {})
-	var s_b = State.new(cu, 0, Vector3i(0, 0, 0), {"move": "ice"})
-	check(s_a.canonical_key() != s_b.canonical_key(), "机关状态必须参与规范键去重")
+	# 状态不该再带机关字段（机制已整体移除，不留死字段）
+	var s = State.new(d, ox, Vector3i(0, 0, 0))
+	check(s.to_dict().keys().size() == 3, "状态只应有 shape/orientation/position 三个字段")
+	check(not s.to_dict().has("mechanism"), "状态不应残留 mechanism 字段")
 
 
 func _test_reversibility() -> void:
@@ -224,7 +182,6 @@ func _test_reversibility() -> void:
 		_make_state("domino", "standing", [2, 0, 2]),
 		_make_state("domino", "lying_x", [2, 0, 2]),
 		_make_state("domino", "lying_z", [2, 0, 2]),
-		_make_state("cube", 0, [3, 0, 3]),
 	]
 	for s in starts:
 		for d in dirs:

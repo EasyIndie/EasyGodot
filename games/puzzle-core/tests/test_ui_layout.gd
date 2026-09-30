@@ -19,6 +19,7 @@ func _init() -> void:
 	_test_touch_unit()
 	_test_best_dir()
 	_test_level_grid()
+	_test_safe_insets()
 
 	print(JSON.stringify({
 		"suite": "test_ui_layout",
@@ -133,3 +134,44 @@ func _test_level_grid() -> void:
 	check(int(L.level_grid(Vector2(1280, 720), 20)["columns"]) == 5, "宽屏应为 5 列")
 	# 关卡数少于列数时不应留空列
 	check(int(L.level_grid(Vector2(1280, 720), 2)["columns"]) == 2, "关卡数少于列数时列数应跟随关卡数")
+
+func _test_safe_insets() -> void:
+	# 安全区域（刘海 / 灵动岛 / 底部手势条）只做“清洗 + 夹取”，规则必须可测：
+	# 真机上这地方出错的表现是「按钮被切掉」，而且很难复现，所以这里穷举边界。
+	var vp := Vector2(390.0, 844.0)   # 常见手机竖屏
+
+	# 1) 解析：正常 JSON
+	var d: Dictionary = L.parse_insets('{"top":47,"bottom":34,"left":0,"right":0}')
+	check(absf(float(d["top"]) - 47.0) < 0.01, "应解析出 top")
+	check(absf(float(d["bottom"]) - 34.0) < 0.01, "应解析出 bottom")
+	# 2) 解析：坏数据一律退化成“没有安全区”（宁可少避让，也不能让 UI 消失）
+	for bad in ["", "not json", "[]", "null", "{}"]:
+		var bd: Dictionary = L.parse_insets(bad)
+		check(float(bd["top"]) == 0.0 and float(bd["bottom"]) == 0.0, "坏数据应退化为 0: " + bad)
+	# 3) 负值应被夹到 0（某些平台会返回负数）
+	var neg: Dictionary = L.parse_insets('{"top":-50,"left":-1}')
+	check(float(neg["top"]) == 0.0, "负 inset 应夹到 0")
+
+	# 4) 夹取：单边不超过 12%
+	var huge: Dictionary = L.safe_insets(vp, {"top": 5000.0, "bottom": 5000.0, "left": 5000.0, "right": 5000.0})
+	check(float(huge["top"]) <= vp.y * L.SAFE_MAX_RATIO + 0.01, "单边 inset 应被夹取")
+	# 5) 夹取：左右/上下加起来不能超过一半（否则内容区被挤没）
+	check(float(huge["left"]) + float(huge["right"]) <= vp.x * L.SAFE_PAIR_MAX_RATIO + 0.01, "左右合计应被夹取")
+	check(float(huge["top"]) + float(huge["bottom"]) <= vp.y * L.SAFE_PAIR_MAX_RATIO + 0.01, "上下合计应被夹取")
+
+	# 6) 正常值应原样通过（夹取只针对离谱数据）
+	var ok: Dictionary = L.safe_insets(vp, {"top": 47.0, "bottom": 34.0, "left": 0.0, "right": 0.0})
+	check(absf(float(ok["top"]) - 47.0) < 0.01, "正常 inset 不应被改动")
+	check(absf(float(ok["bottom"]) - 34.0) < 0.01, "正常 inset 不应被改动")
+
+	# 7) 内容区必须始终为正：任何输入下都要留得下东西
+	for raw in [{}, {"top": 1e9}, {"left": 1e9, "right": 1e9}, {"bottom": -1}]:
+		var ins: Dictionary = L.safe_insets(vp, raw)
+		var w: float = vp.x - float(ins["left"]) - float(ins["right"])
+		var h: float = vp.y - float(ins["top"]) - float(ins["bottom"])
+		check(w > vp.x * 0.4 and h > vp.y * 0.4, "内容区不应被 inset 挤没: " + str(raw))
+
+	# 8) insets_equal 用于“只在变化时重排”，容差 0.5px
+	check(L.insets_equal(ok, ok.duplicate()), "相同 insets 应判等")
+	check(L.insets_equal(ok, {"top": 47.2, "bottom": 34.0, "left": 0.0, "right": 0.0}), "亚像素差异应判等")
+	check(not L.insets_equal(ok, {"top": 60.0, "bottom": 34.0, "left": 0.0, "right": 0.0}), "明显差异应判不等")

@@ -47,7 +47,7 @@ func _remove(path: String) -> void:
 func _entries() -> Array:
 	return [
 		{"key": "level_01", "shape": "domino", "optimal": 3},
-		{"key": "level_02", "shape": "cube", "optimal": 5},
+		{"key": "level_02", "shape": "domino", "optimal": 5},
 		{"key": "level_03", "shape": "domino", "optimal": 7},
 	]
 
@@ -129,7 +129,8 @@ func _test_detail_text() -> void:
 	check(d.contains("骨牌"), "详情应含形状: " + d)
 	check(d.contains("参考 3 步"), "详情应含参考步数: " + d)
 	check(d.contains("本机榜：4 步"), "详情应含本机榜: " + d)
-	check(Leaderboard.detail_text(entries, p, 1).contains("方块"), "cube 关应显示方块")
+	# 形状名统一由 shapes.gd 的 DISPLAY_NAMES 提供（cube 已移除，只剩骨牌）
+	check(Leaderboard.detail_text(entries, p, 1).contains("骨牌"), "详情应显示形状名")
 	check(Leaderboard.detail_text(entries, p, 99) == "", "越界索引应返回空串")
 
 

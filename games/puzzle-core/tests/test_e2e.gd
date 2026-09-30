@@ -14,14 +14,23 @@ const UiLayout = preload("res://meta/ui_layout.gd")
 var checks: int = 0
 var failures: int = 0
 
+# 整套 e2e 使用的临时存档（不写玩家的 user://progress.json）
+const SUITE_SAVE := "user://test_e2e_progress.json"
+
 
 func _init() -> void:
 	_run()
 
 
 func _run() -> void:
+	# 所有基于场景的测试共用一个**临时存档**。
+	# 为什么必须隔离：这些测试会真的 record_win，早先直接写 user://progress.json，
+	# 于是第二次运行时“全新进度”的前提就不成立了（上一次跑测的通关记录还在）——
+	# 测试污染玩家存档本身就是 bug。
+	_remove_tmp(SUITE_SAVE)
+	ProjectSettings.set_setting("puzzle/progress_path", SUITE_SAVE)
 	_test_game_direct()
-	_test_cube_level()
+	_test_tiny_level()
 	_test_fall()
 	_test_void_fall()
 	_test_input_mapping()
@@ -30,6 +39,12 @@ func _run() -> void:
 	await _test_level_select()
 	await _test_replay_playback()
 	await _test_touch_controls()
+	await _test_respawn_animation()
+	await _test_swipe_hint()
+	await _test_touch_safe_area()
+	await _test_ending()
+	ProjectSettings.set_setting("puzzle/progress_path", "")
+	_remove_tmp(SUITE_SAVE)
 	_report_and_quit()
 
 
@@ -62,7 +77,7 @@ func _test_game_direct() -> void:
 	check(ok, "夹具应加载成功")
 	check(game.level_id == "fixture_8moves", "level_id 应为 fixture_8moves")
 	var tiles: int = game.board.grid_x * game.board.grid_z - game.board.holes.size()
-	check(game.board_root != null and game.board_root.get_child_count() == tiles, "棋盘应只渲染实心瓦片（空洞留空）")
+	check(game.board_root != null and game.tile_count() == tiles, "棋盘应只渲染实心瓦片（空洞留空）")
 	check(game.block.get_child_count() == game.state.world_cells().size(), "方块单元数应等于世界单元数")
 
 	# 用求解器的解驱动游戏，验证视觉层与 core 协同
@@ -85,33 +100,35 @@ func _test_game_direct() -> void:
 	game.free()
 
 
-func _test_cube_level() -> void:
-	# Cube（单格形状）应能端到端跑通：加载 → 渲染 1 格 → 沿解走 → 获胜
+func _test_tiny_level() -> void:
+	# 最小关卡应能端到端跑通：加载 → 渲染 → 沿解走 → 获胜。
+	# 这里刻意用**独立的夹具**（3x3 无洞）而不是 levels/ 里的真实关卡，
+	# 这样玩家可见的关卡内容怎么调整都不会让这条测试变红。
 	var game = Game.new()
 	game.animate = false
 	root.add_child(game)
-	check(game.load_dict(Loader.load_dict(Fixtures.cube_level())), "cube 夹具应加载成功")
-	check(game.state.shape.id == "cube", "形状应为 cube")
-	check(game.state.world_cells().size() == 1, "cube 应只占 1 格")
-	check(game.block.get_child_count() == 1, "cube 应只渲染 1 个单元")
+	check(game.load_dict(Loader.load_dict(Fixtures.tiny_level())), "tiny 夹具应加载成功")
+	check(game.state.shape.id == "domino", "形状应为 domino")
+	check(game.state.world_cells().size() == 2, "竖立骨牌应占 2 格")
+	check(game.block.get_child_count() == 2, "骨牌应渲染 2 个单元")
 	var tiles: int = game.board.grid_x * game.board.grid_z - game.board.holes.size()
-	check(game.board_root.get_child_count() == tiles, "cube 关卡的棋盘渲染应正确")
+	check(game.tile_count() == tiles, "棋盘渲染应正确")
 
 	var sol: Dictionary = Solver.new(game.board, game.state).solve()
-	check(sol["solvable"], "cube 夹具应可解")
+	check(sol["solvable"], "tiny 夹具应可解")
 	for label in sol["solution"]:
-		check(game.try_move(Moves.direction_from_label(label)), "cube 移动应成功: " + str(label))
-	check(game.is_won(), "cube 走到目标应获胜")
+		check(game.try_move(Moves.direction_from_label(label)), "移动应成功: " + str(label))
+	check(game.is_won(), "走到目标应获胜")
 
-	# cube 越界翻滚应触发坠落（与 domino 共用同一套「无地面」判定）
-	game.load_dict(Loader.load_dict(Fixtures.cube_level()))
-	check(game.try_move(Vector3i(-1, 0, 0)), "cube 越界翻滚应被接受（触发坠落）")
-	check(game.is_lost(), "cube 越界后应坠落失败")
+	# 越界翻滚应触发坠落（「无地面」判定）
+	game.load_dict(Loader.load_dict(Fixtures.tiny_level()))
+	check(game.try_move(Vector3i(-1, 0, 0)), "越界翻滚应被接受（触发坠落）")
+	check(game.is_lost(), "越界后应坠落失败")
 	game.free()
 
 
 func _test_all_levels_render() -> void:
-	# 内容完整性：levels/ 下每一关都应能被视觉层加载并正确渲染（含 cube 关）
+	# 内容完整性：levels/ 下每一关都应能被视觉层加载并正确渲染
 	var dir := DirAccess.open("res://levels")
 	var paths: Array = []
 	if dir != null:
@@ -137,12 +154,13 @@ func _test_all_levels_render() -> void:
 		check(game.load_dict(lv), "视觉层应能加载: " + p)
 		check(game.block.get_child_count() == game.state.world_cells().size(), "方块单元数应正确: " + p)
 		var tiles: int = game.board.grid_x * game.board.grid_z - game.board.holes.size()
-		check(game.board_root.get_child_count() == tiles, "棋盘渲染应正确: " + p)
+		check(game.tile_count() == tiles, "棋盘渲染应正确: " + p)
 		shapes[game.state.shape.id] = true
 		game.free()
 
 	check(shapes.has("domino"), "关卡集应包含 domino 关")
-	check(shapes.has("cube"), "关卡集应包含 cube 关")
+	# cube 已整体移除（见 test_core 的说明）：关卡集不应再出现其他形状
+	check(shapes.size() == 1, "关卡集应只有一种形状，got=" + str(shapes.keys()))
 
 
 func _test_fall() -> void:
@@ -284,10 +302,16 @@ func _test_touch_controls() -> void:
 	scene._refresh_bands()
 	check(scene.help_label.visible, "状态提示收起后操作提示应回来")
 
-	# 3) 方向信号应真的驱动方块
-	var before: int = scene.game.move_count
-	scene._on_touch_direction(Vector3i(1, 0, 0))
-	check(scene.game.move_count == before + 1, "触屏方向应驱动一次移动")
+	# 3) 方向信号应真的驱动方块。
+	# 合法方向从**当前局面**现算，而不是写死 +x：写死会让测试依赖关卡具体内容，
+	# 关卡曲线一调整（本题正在做的事）测试就会无辜变红。
+	scene._load_level(0, false)
+	var legal: Array = scene.game.core.legal_moves()
+	check(legal.size() > 0, "第 1 关起点应至少有一个合法方向")
+	if legal.size() > 0:
+		var before: int = scene.game.move_count
+		scene._on_touch_direction(legal[0])
+		check(scene.game.move_count == before + 1, "触屏方向应驱动一次移动")
 
 	# 4) 选关界面打开时，触屏方向不得穿透到棋盘
 	scene._open_level_select()
@@ -330,7 +354,7 @@ func _test_level_select() -> void:
 	for e in scene.entries:
 		shapes[str(e["shape"])] = true
 	check(shapes.has("domino"), "元数据应包含 domino 关")
-	check(shapes.has("cube"), "元数据应包含 cube 关")
+	check(shapes.size() == 1, "元数据应只有一种形状，got=" + str(shapes.keys()))
 
 	var fresh = Progress.new(tmp)
 	scene.level_select.open_with(scene.entries, fresh, 0)
@@ -393,5 +417,181 @@ func _test_replay_playback() -> void:
 	check(scene.game.move_count == 0, "回放结束后步数应归零")
 
 	await create_timer(0.8).timeout   # 等灯光脉冲收尾，避免中途释放节点
+	scene.free()
+	_remove_tmp(tmp)
+
+
+func _test_respawn_animation() -> void:
+	# 坠落后重开必须有动画：直接“啪”一下复位会让玩家以为自己误触了什么。
+	var tmp := "user://test_e2e_respawn.json"
+	_remove_tmp(tmp)
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	scene.touch_controls.set_shown(true)
+	check(scene.game.animate, "交互场景应开启动画")
+
+	# 先让它掉下去
+	var legal: Array = scene.game.core.legal_moves()
+	check(legal.size() > 0, "第 1 关应有合法方向")
+	var fell: bool = false
+	for d in [Vector3i(-1, 0, 0), Vector3i(1, 0, 0), Vector3i(0, 0, -1), Vector3i(0, 0, 1)]:
+		# 找一个会掉出去的方向
+		if not scene.game.board.supports(scene.game.state.cells_at(
+				scene.game._plan_move(d)["orientation"], scene.game._plan_move(d)["position"])):
+			scene.game.animate = false
+			scene.game.try_move(d)
+			scene.game.animate = true
+			fell = scene.game.is_lost()
+			break
+	if fell:
+		check(scene.game.is_lost(), "该方向应导致坠落")
+		scene._on_touch_restart()
+		check(scene.game.animating, "重开应播放落体动画（animating 应为真）")
+		check(scene.game.block.position.y > 1.0, "重生时方块应从上方落下")
+		# 等动画结束，方块应精确落回起点
+		var guard: int = 0
+		while scene.game.animating and guard < 240:
+			await process_frame
+			guard += 1
+		check(not scene.game.animating, "落体动画应结束")
+		check(absf(scene.game.block.position.y) < 0.01, "落体结束后方块应归位")
+		check(not scene.game.is_lost(), "重开后应回到未失败状态")
+	await create_timer(0.3).timeout
+	scene.free()
+	_remove_tmp(tmp)
+
+
+func _test_swipe_hint() -> void:
+	# 触屏玩家看不见键盘提示，所以第一次进关卡要给一次“对角线滑动”提示，
+	# 并在玩家真的动了一次方块之后收起（比等超时更贴合“学会了”这个时刻）。
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	scene.touch_controls.set_shown(true)
+	scene.touch_controls.show_swipe_hint()
+	check(scene.touch_controls.hint_visible(), "首次进关卡应显示滑动手势提示")
+	check(scene.touch_controls.hint_text().contains("↖"), "提示里应画出对角线方向")
+	check(not scene.touch_controls.hint_text().contains("Esc"), "触屏提示不应出现键盘按键名")
+
+	var legal: Array = scene.game.core.legal_moves()
+	if legal.size() > 0:
+		scene._on_touch_direction(legal[0])
+		await create_timer(0.5).timeout
+		check(not scene.touch_controls.hint_visible(), "第一次成功移动后提示应收起")
+		# 再次调用不应重新弹出（每局只提示一次，反复提示会变成噪音）
+		scene.touch_controls.show_swipe_hint()
+		check(not scene.touch_controls.hint_visible(), "同一局内不应重复提示")
+	await create_timer(0.3).timeout
+	scene.free()
+
+
+func _test_touch_safe_area() -> void:
+	# 全部触屏控件都必须落在安全区域之内，否则 iPhone 横屏时
+	# 左上按钮会被灵动岛切掉、右下按钮会被底部手势条压住。
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(844, 390)      # 典型手机横屏（CSS px）
+	root.add_child(scene)
+	await process_frame
+	scene.touch_controls.set_shown(true)
+	var ins := {"left": 47.0, "top": 0.0, "right": 47.0, "bottom": 21.0}
+	scene.touch_controls.set_safe_insets(ins)
+	var info: Dictionary = scene.touch_controls.layout_info()
+	var vp: Vector2 = scene.get_viewport().get_visible_rect().size
+	var min_x: float = float(ins["left"])
+	var max_x: float = vp.x - float(ins["right"])
+	var min_y: float = float(ins["top"])
+	var max_y: float = vp.y - float(ins["bottom"])
+	for name in ["pad", "actions", "hint"]:
+		var r: Dictionary = info[name]
+		var pos: Vector2 = r["pos"]
+		var size: Vector2 = r["size"]
+		check(pos.x >= min_x - 1.0 and pos.x + size.x <= max_x + 1.0,
+			"%s 应在左右安全区内（x=%.0f w=%.0f 区间=[%.0f,%.0f]）" % [name, pos.x, size.x, min_x, max_x])
+		check(pos.y >= min_y - 1.0 and pos.y + size.y <= max_y + 1.0,
+			"%s 应在上下安全区内（y=%.0f h=%.0f 区间=[%.0f,%.0f]）" % [name, pos.y, size.y, min_y, max_y])
+	# 两个操作区不应互相重叠（D-pad 与动作按钮各占一角）
+	var pad: Dictionary = info["pad"]
+	var act: Dictionary = info["actions"]
+	var pad_r := Rect2(pad["pos"], pad["size"])
+	var act_r := Rect2(act["pos"], act["size"])
+	check(not pad_r.intersects(act_r), "方向键与动作按钮不应重叠")
+	# 底部占位应把安全区算进去（HUD 提示带靠它避让）
+	scene.touch_controls.set_safe_insets({"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 60.0})
+	check(scene.touch_controls.bottom_inset() >= 60.0, "底部占位应包含安全区高度")
+	# 回放中按钮语义应切换成「停止」（触屏没有 Esc）
+	scene.touch_controls.set_replay_playing(true)
+	check(scene.touch_controls.is_replay_playing(), "回放状态应可切换")
+	scene.touch_controls.set_replay_playing(false)
+	check(not scene.touch_controls.is_replay_playing(), "回放状态应可恢复")
+	scene.free()
+
+
+func _test_ending() -> void:
+	# 全部通关后必须有明确的“旅程结束”（庆祝动画 + 统计 + 出口）。
+	# 早期行为是默默滚回第 1 关 —— 玩家会以为游戏出 bug 了。
+	var tmp := "user://test_e2e_ending.json"
+	_remove_tmp(tmp)
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	check(scene.ending != null, "主场景应创建通关庆祝层")
+	check(not scene.ending.is_open(), "初始不应显示庆祝层")
+
+	# 尚未全部通关时不应弹出
+	check(not scene._all_completed(), "全新进度不应判定为全部通关")
+	scene._show_ending()
+	check(not scene.ending.is_open(), "未全部通关时不应弹出庆祝层")
+
+	# 标记全部通关
+	var p = scene.progress
+	for e in scene.entries:
+		var opt: int = maxi(int(e.get("optimal", 1)), 1)
+		var moves: Array = []
+		for _i in range(opt):
+			moves.append("right")
+		p.record_win(str(e["key"]), moves)
+	check(scene._all_completed(), "全部通关后应判定为完成")
+	scene._show_ending()
+	check(scene.ending.is_open(), "全部通关后应弹出庆祝层")
+	check(scene.ending.title_text().contains("通关"), "庆祝标题应明确“通关”")
+	check(scene.ending.subtitle_text().contains("%d / %d" % [scene.entries.size(), scene.entries.size()]),
+		"副标题应显示 20 / 20 关")
+	var stats: String = scene.ending.stats_text()
+	check(stats.contains("总步数"), "统计应含总步数")
+	check(stats.contains("达最优"), "统计应含最优关数")
+	check(scene.ending.button_count() == 2, "庆祝层应有两个明确出口（再玩一次 / 回到选关）")
+	await create_timer(0.4).timeout
+	check(scene.ending.confetti_count() > 0, "庆祝时应撒花（有动画）")
+	check(not scene.hud_layer.visible, "庆祝层打开时 HUD 应让位")
+	check(not scene.touch_controls.is_shown(), "庆祝层打开时触屏控件应让位")
+
+	# 出口 1：回到第 1 关（不清进度：记录是玩家的资产）
+	scene._on_ending_restart()
+	check(not scene.ending.is_open(), "点“再玩一次”应关闭庆祝层")
+	check(scene.current_index == 0, "应回到第 1 关")
+	check(scene.progress.completed_count() == scene.entries.size(), "再玩一次不应清空进度记录")
+
+	# 出口 2：回到选关
+	scene._show_ending()
+	scene._on_ending_select()
+	check(not scene.ending.is_open(), "点“回到选关”应关闭庆祝层")
+	check(scene.level_select.is_open(), "应打开选关界面")
+	scene.level_select.close()
+	await create_timer(0.3).timeout
+
+	# 庆祝层也要避开安全区（横屏刘海机型上卡片不能被切掉）
+	var ins := {"left": 47.0, "top": 0.0, "right": 47.0, "bottom": 21.0}
+	scene.ending.set_safe_insets(ins)
+	scene._show_ending()
+	var r: Rect2 = scene.ending.card_rect()
+	check(r.position.x >= float(ins["left"]) - 1.0, "庆祝卡片应避开左安全区")
+	check(r.position.x + r.size.x <= 1280.0 - float(ins["right"]) + 1.0, "庆祝卡片应避开右安全区")
+	check(r.position.y + r.size.y <= 720.0 - float(ins["bottom"]) + 1.0, "庆祝卡片应避开下安全区")
+	scene.ending.close()
+	await create_timer(0.3).timeout
 	scene.free()
 	_remove_tmp(tmp)

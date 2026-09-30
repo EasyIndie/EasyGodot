@@ -74,3 +74,53 @@ static func best_dir(swipe: Vector2, screen_dirs: Dictionary) -> Vector3i:
 			best_score = score
 			best = d
 	return best
+
+
+# ── 安全区域（刘海 / 灵动岛 / 底部手势条）────────────────────────────────
+# 约定：inset = **每边被系统 UI 遮挡的像素数**。
+#   Web 端从 CSS env(safe-area-inset-*) 读（见 workflow/web/head_include.html），
+#   原生平台从 DisplayServer.get_display_safe_area() 换算。
+# 这里只做纯逻辑：解析 + 夹取。夹取很重要——脏数据（比如某平台返回了半个屏幕）
+# 会把整个 UI 挤到角落里，而这在真机上极难复现。
+const SAFE_MAX_RATIO := 0.12        # 单边最多吃掉对应边长的 12%
+const SAFE_PAIR_MAX_RATIO := 0.5    # 左右（或上下）加起来不能超过一半
+
+
+static func parse_insets(text: String) -> Dictionary:
+	# 把平台给的 JSON 文本转成 insets；任何异常都退化成「没有安全区」，
+	# 宁可少避让，也不能因为解析失败让 UI 消失。
+	var out := {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
+	var j := JSON.new()
+	if j.parse(text) != OK or not (j.data is Dictionary):
+		return out
+	var d: Dictionary = j.data
+	for k in out.keys():
+		out[k] = maxf(float(d.get(k, 0.0)), 0.0)
+	return out
+
+
+static func safe_insets(viewport: Vector2, raw: Dictionary) -> Dictionary:
+	var out := {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
+	for k in out.keys():
+		var v: float = maxf(float(raw.get(k, 0.0)), 0.0)
+		var dim: float = viewport.x if (k == "left" or k == "right") else viewport.y
+		out[k] = clampf(v, 0.0, maxf(dim, 1.0) * SAFE_MAX_RATIO)
+	# 成对夹取：无论 insets 多离谱，都必须给内容留出至少一半空间
+	for axis in ["h", "v"]:
+		var a: String = "left" if axis == "h" else "top"
+		var b: String = "right" if axis == "h" else "bottom"
+		var limit: float = maxf(viewport.x if axis == "h" else viewport.y, 1.0) * SAFE_PAIR_MAX_RATIO
+		var total: float = out[a] + out[b]
+		if total > limit and total > 0.0:
+			var s: float = limit / total
+			out[a] = float(out[a]) * s
+			out[b] = float(out[b]) * s
+	return out
+
+
+static func insets_equal(a: Dictionary, b: Dictionary) -> bool:
+	# 用于「只在真正变化时才重排 UI」，避免每帧重算布局
+	for k in ["left", "top", "right", "bottom"]:
+		if absf(float(a.get(k, 0.0)) - float(b.get(k, 0.0))) > 0.5:
+			return false
+	return true
