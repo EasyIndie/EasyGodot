@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WebGL 诊断 · EasyGodot</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin:0; padding:28px; background:#0b0f18; color:#e8eefc;
+         font:14px/1.75 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  h1 { font:600 20px/1.4 system-ui,-apple-system,"PingFang SC",sans-serif; margin:0 0 4px; }
+  p.lead { color:#8b97b0; font:13px/1.6 system-ui,-apple-system,"PingFang SC",sans-serif; margin:0 0 20px; }
+  .ok { color:#5fdc8f } .bad { color:#ff6b6b } .warn { color:#ffc857 }
+  pre { background:#131a28; border:1px solid #263149; border-radius:10px;
+        padding:16px; white-space:pre-wrap; word-break:break-word; user-select:all; }
+  button { margin-top:14px; padding:.6rem 1.3rem; border:0; border-radius:999px;
+           background:#2f6fd0; color:#fff; font-size:14px; cursor:pointer; }
+</style>
+</head>
+<body>
+<h1>WebGL 诊断</h1>
+<p class="lead">用于排查「WebGL context lost」。把下面整段报告复制回来即可。</p>
+<pre id="out">检测中…</pre>
+<button onclick="location.reload()">重新检测</button>
+<script>
+const L = [];
+const say = (s) => L.push(s);
+const mark = (ok) => ok ? '<span class="ok">OK</span>' : '<span class="bad">FAIL</span>';
+
+function probe(w, h, dpr) {
+  const c = document.createElement('canvas');
+  c.width = Math.floor(w * dpr);
+  c.height = Math.floor(h * dpr);
+  let gl = null;
+  try { gl = c.getContext('webgl2', { antialias: true, depth: true, stencil: true, alpha: true }); } catch (e) {}
+  if (!gl) return { ok: false, note: '无法创建 webgl2 上下文' };
+  // 真正分配一个同尺寸的 renderbuffer + framebuffer，看驱动是否吃得下
+  const rb = gl.createRenderbuffer();
+  gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, c.width, c.height);
+  const fb = gl.createFramebuffer();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+  const err = gl.getError();
+  const lost = gl.isContextLost();
+  const complete = gl.checkFramebufferStatus(gl.FRAMEBUFFER) === gl.FRAMEBUFFER_COMPLETE;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  return { ok: err === 0 && !lost && complete, note: `glError=${err} lost=${lost} fbComplete=${complete}` };
+}
+
+say('=== 环境 ===');
+say('UA            : ' + navigator.userAgent);
+say('platform      : ' + (navigator.platform || '-'));
+say('devicePixelRatio: ' + window.devicePixelRatio);
+say('内窗口(CSS)   : ' + window.innerWidth + ' x ' + window.innerHeight);
+say('屏幕          : ' + screen.width + ' x ' + screen.height);
+const guessPhysical = window.innerWidth * window.devicePixelRatio;
+say('若用旧策略「自适应×DPR」的帧缓冲: ' +
+    Math.round(guessPhysical) + ' x ' + Math.round(window.innerHeight * window.devicePixelRatio) +
+    '  = ' + (guessPhysical * window.innerHeight * window.devicePixelRatio / 1e6).toFixed(1) + ' 百万像素');
+
+say('');
+say('=== 能力 ===');
+const c0 = document.createElement('canvas');
+const gl = c0.getContext('webgl2');
+// 同一个 canvas 只能有一种上下文，WebGL1 检测必须另开一个
+const gl1 = document.createElement('canvas').getContext('webgl');
+say('WebGL 2       : ' + mark(!!gl));
+say('WebGL 1       : ' + mark(!!gl1));
+if (gl) {
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  say('renderer      : ' + (dbg ? gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER)));
+  say('vendor        : ' + (dbg ? gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL) : gl.getParameter(gl.VENDOR)));
+  say('MAX_TEXTURE_SIZE   : ' + gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  say('MAX_RENDERBUFFER_SIZE: ' + gl.getParameter(gl.MAX_RENDERBUFFER_SIZE));
+  say('MAX_VIEWPORT_DIMS  : ' + Array.from(gl.getParameter(gl.MAX_VIEWPORT_DIMS)).join(' x '));
+  say('MAX_TEXTURE_IMAGE_UNITS: ' + gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS));
+  const need = ['EXT_color_buffer_float', 'OES_texture_float_linear', 'WEBGL_compressed_texture_s3tc'];
+  need.forEach((n) => say(('ext ' + n).padEnd(34) + ': ' + mark(!!gl.getExtension(n))));
+}
+
+say('');
+say('=== 帧缓冲压力测试（真正分配）===');
+const cases = [
+  ['旧策略 窗口×DPR', window.innerWidth, window.innerHeight, window.devicePixelRatio],
+  ['新策略 固定 1280×720', 1280, 720, 1],
+  ['固定 960×540（更低）', 960, 540, 1],
+];
+cases.forEach(([name, w, h, dpr]) => {
+  const r = probe(w, h, dpr);
+  say(name.padEnd(26) + ': ' + mark(r.ok) + '  ' + r.note);
+});
+
+say('');
+say('=== 同时能开几个 WebGL2 上下文（Safari 上限较低）===');
+let n = 0;
+try {
+  for (; n < 20; n++) {
+    const cc = document.createElement('canvas');
+    if (!cc.getContext('webgl2')) break;
+  }
+} catch (e) {}
+say('可创建数量    : ' + n + (n < 8 ? '  <span class="warn">（偏少，建议关闭其他标签页）</span>' : ''));
+
+document.getElementById('out').innerHTML = L.join('\n');
+</script>
+</body>
+</html>

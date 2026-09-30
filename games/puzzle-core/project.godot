@@ -25,3 +25,6 @@ theme/custom_font="res://fonts/NotoSansSC-Regular.otf"
 
 renderer/rendering_method="gl_compatibility"
 renderer/rendering_method.mobile="gl_compatibility"
+; Web（尤其 Safari）对 WebGL 内存很敏感：显式关掉 MSAA，避免多重采样帧缓冲
+anti_aliasing/quality/msaa_3d=0
+anti_aliasing/quality/msaa_2d=0
