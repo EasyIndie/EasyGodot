@@ -87,6 +87,7 @@ workflow/scripts/gf-pages.sh
 | [03 求解器与质检](workflow/docs/03-solver-and-qc.md) | BFS 最优解 + 「生成 → 质检 → 筛选」闭环 |
 | [04 视觉层与 E2E](workflow/docs/04-visual-and-e2e.md) | 视觉层薄化、输入映射、选关与回放、headless E2E |
 | [05 生成与导出](workflow/docs/05-generation-and-export.md) | 关卡生成、导出管线、Steam 打包、GitHub Pages |
+| [08 平台与竞品调研](workflow/docs/08-platform-and-market-research.md) | Steam/Apple/Google/华为的费用与门槛、移动端可行性、竞品数据 |
 | [06 新游戏手册](workflow/docs/06-new-game-playbook.md) | 用同一套平台做下一款游戏 |
 | [07 MVP 状态](workflow/docs/07-mvp-status.md) | MVP 对照表、待办、坑与交接说明 |
 
