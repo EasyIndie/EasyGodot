@@ -59,6 +59,7 @@ var won_flag: bool = false
 var lost_flag: bool = false
 var animating: bool = false
 var animate: bool = true     # false = 同步（测试用）
+var _stick_prev: Dictionary = {}   # 左摇杆各轴的上一次取值（边沿触发用）
 var low_effects: bool = false  # 低端 GPU / 排障：停掉逐帧材质更新
 var move_count: int = 0
 var _tween: Tween = null
@@ -133,7 +134,11 @@ func is_lost() -> bool:
 
 
 func event_to_dir(event: InputEvent) -> Vector3i:
-	# 按键 → 移动方向（与 solver 的 right/left/forward/backward 约定一致）
+	# 输入 → 移动方向（与 solver 的 right/left/forward/backward 约定一致）。
+	# 三条路都要走通，否则「遥控器/手柄只能看不能玩」：
+	#   1) 键盘：桌面与**电视遥控器**（Android TV 的方向键会被系统当按键上报）
+	#   2) 手柄按键：部分遥控器/蓝牙手柄把方向键上报成 D-pad 按钮
+	#   3) 左摇杆：需要**上升沿**（轴事件每帧都来，按阈值直接触发会连续移动好几步）
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
 			KEY_RIGHT, KEY_D:
@@ -144,7 +149,41 @@ func event_to_dir(event: InputEvent) -> Vector3i:
 				return Vector3i(0, 0, -1)  # 屏幕上移 = 远离摄像机 = -z
 			KEY_DOWN, KEY_S:
 				return Vector3i(0, 0, 1)   # 屏幕下移 = 靠近摄像机 = +z
+	elif event is InputEventJoypadButton and event.pressed:
+		match event.button_index:
+			JOY_BUTTON_DPAD_RIGHT:
+				return Vector3i(1, 0, 0)
+			JOY_BUTTON_DPAD_LEFT:
+				return Vector3i(-1, 0, 0)
+			JOY_BUTTON_DPAD_UP:
+				return Vector3i(0, 0, -1)
+			JOY_BUTTON_DPAD_DOWN:
+				return Vector3i(0, 0, 1)
+	elif event is InputEventJoypadMotion:
+		return _stick_dir(event)
 	return Vector3i.ZERO
+
+
+const STICK_DEADZONE := 0.55   # 摇杆阈值：太低会误触，太高会“推了没反应”
+
+
+func _stick_dir(event: InputEventJoypadMotion) -> Vector3i:
+	# 只在**越过阈值的那一刻**产生一次移动（边沿触发）。
+	# 直接按阈值判断的话，摇杆按住期间每帧的轴事件都会触发一次移动 —— 一推走好几格。
+	if event.axis != JOY_AXIS_LEFT_X and event.axis != JOY_AXIS_LEFT_Y:
+		return Vector3i.ZERO
+	var prev: float = _stick_prev.get(event.axis, 0.0)
+	_stick_prev[event.axis] = event.axis_value
+	var was_on: bool = absf(prev) >= STICK_DEADZONE
+	var is_on: bool = absf(event.axis_value) >= STICK_DEADZONE
+	if is_on == was_on:
+		return Vector3i.ZERO     # 状态没变（含“按住不放”）→ 不产生新移动
+	if not is_on:
+		return Vector3i.ZERO     # 回到中位
+	var sign_now: float = signf(event.axis_value)
+	if event.axis == JOY_AXIS_LEFT_X:
+		return Vector3i(int(sign_now), 0, 0)
+	return Vector3i(0, 0, int(sign_now))
 
 
 # ── 动画 ────────────────────────────────────────────────

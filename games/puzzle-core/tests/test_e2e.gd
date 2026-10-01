@@ -46,6 +46,7 @@ func _run() -> void:
 	await _test_touch_safe_area()
 	await _test_ending()
 	await _test_mobile_back()
+	await _test_tv_input()
 	ProjectSettings.set_setting("puzzle/progress_path", "")
 	_remove_tmp(SUITE_SAVE)
 	_report_and_quit()
@@ -592,6 +593,81 @@ func _test_mobile_back() -> void:
 	await create_timer(0.25).timeout
 	scene.free()
 	_remove_tmp(tmp)
+
+
+func _test_tv_input() -> void:
+	# 电视遥控器 / 手柄：三条输入通道都要能移动，且「确认键」必须能在坠落/通关时救场
+	# （只有键盘有 R 键，遥控器上没有 —— 不处理的话电视玩家掉下去就卡死了）
+	var tmp := "user://test_e2e_tv.json"
+	_remove_tmp(tmp)
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1920, 1080)   # 电视常见分辨率
+	root.add_child(scene)
+	await process_frame
+	scene.game.animate = false
+
+	# ① 遥控器方向键（Android TV 上报为按键）
+	check(scene.game.event_to_dir(_key(KEY_RIGHT)) == Vector3i(1, 0, 0), "遥控器右键应向右")
+	check(scene.game.event_to_dir(_key(KEY_UP)) == Vector3i(0, 0, -1), "遥控器上键应向上")
+
+	# ② 手柄 D-pad（部分遥控器/蓝牙手柄上报为按钮）
+	check(scene.game.event_to_dir(_pad(JOY_BUTTON_DPAD_LEFT)) == Vector3i(-1, 0, 0), "手柄十字键左应向左")
+	check(scene.game.event_to_dir(_pad(JOY_BUTTON_DPAD_DOWN)) == Vector3i(0, 0, 1), "手柄十字键下应向下")
+	check(scene.game.event_to_dir(_pad(JOY_BUTTON_A)) == Vector3i.ZERO, "手柄 A 键不是方向")
+
+	# ③ 左摇杆：只在**越过阈值那一刻**产生一次移动（按住不放不能连走好几格）
+	check(scene.game.event_to_dir(_axis(JOY_AXIS_LEFT_X, 0.9)) == Vector3i(1, 0, 0), "推摇杆应产生一次移动")
+	check(scene.game.event_to_dir(_axis(JOY_AXIS_LEFT_X, 0.95)) == Vector3i.ZERO,
+		"摇杆按着不放不应继续触发（边沿触发）")
+	check(scene.game.event_to_dir(_axis(JOY_AXIS_LEFT_X, 0.0)) == Vector3i.ZERO, "回中不产生移动")
+	check(scene.game.event_to_dir(_axis(JOY_AXIS_LEFT_Y, -0.8)) == Vector3i(0, 0, -1), "摇杆向上推")
+	scene.game.event_to_dir(_axis(JOY_AXIS_LEFT_Y, 0.0))
+
+	# ④ 确认键的上下文职责（这是电视能玩下去的关键）
+	check(scene.primary_action() == "ignore", "正常对局中按确认不应有任何副作用")
+	scene.game.lost_flag = true
+	check(scene.primary_action() == "restart", "坠落时按确认应重开（遥控器上没有 R 键）")
+	scene.game.lost_flag = false
+	scene.game.won_flag = true
+	check(scene.primary_action() == "next_level", "通关时按确认应进入下一关")
+	scene.game.won_flag = false
+
+	# ⑤ 庆祝层的按钮必须可聚焦 —— 否则电视上按什么都没反应（原来写的是 FOCUS_NONE）
+	for e in scene.entries:
+		scene.progress.record_win(str(e["key"]), ["right"])
+	scene._show_ending()
+	var focusable := true
+	for b in scene.ending._buttons.get_children():
+		if (b as Button).focus_mode == Control.FOCUS_NONE:
+			focusable = false
+	check(focusable, "庆祝层的按钮必须可聚焦（电视/手柄只能靠焦点导航）")
+	var focused: Control = scene.get_viewport().gui_get_focus_owner()
+	check(focused != null, "打开庆祝层应把初始焦点给到按钮（遥控器立刻可用）")
+	scene.ending.close()
+	await create_timer(0.3).timeout
+	scene.free()
+	_remove_tmp(tmp)
+
+
+func _key(code: int) -> InputEventKey:
+	var e := InputEventKey.new()
+	e.keycode = code
+	e.pressed = true
+	return e
+
+
+func _pad(btn: int) -> InputEventJoypadButton:
+	var e := InputEventJoypadButton.new()
+	e.button_index = btn
+	e.pressed = true
+	return e
+
+
+func _axis(ax: int, v: float) -> InputEventJoypadMotion:
+	var e := InputEventJoypadMotion.new()
+	e.axis = ax
+	e.axis_value = v
+	return e
 
 
 func _test_respawn_animation() -> void:

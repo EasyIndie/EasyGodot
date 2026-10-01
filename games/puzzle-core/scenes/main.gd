@@ -96,6 +96,7 @@ func _ready() -> void:
 	game.won.connect(_on_won)
 	game.fell.connect(_on_fell)
 	_load_level(0, false)
+	_apply_tv_ui_scale()
 	# 移动端的「返回」：根窗口发 go_back_requested（Android 返回键 / iOS 边缘返回手势）。
 	# 必须在 project.godot 里把 application/config/quit_on_go_back 设为 false，
 	# 否则引擎会直接退出（表现就是「按一下返回 = 闪退」）。
@@ -173,6 +174,36 @@ func _process(delta: float) -> void:
 		_apply_render_quality()
 
 
+func primary_action() -> String:
+	# 遥控器只有一个「确认」键（Enter / 空格 / 手柄 A 都是它的上报形式），
+	# 它必须**上下文相关**，否则电视玩家掉下去就卡死了：
+	#   回放中 → 停止回放；已坠落 → 重开；已通关 → 下一关；其余 → 什么都不做
+	# 「其余不做」是刻意的：对局中按确认就弹选关会让键盘玩家觉得很意外，
+	# 而选关本来就有专门入口（L / 返回键 / 屏幕按钮）。
+	if _replaying:
+		return "stop_replay"
+	if game == null or transitioning:
+		return "ignore"
+	if game.is_lost():
+		return "restart"
+	if game.is_won():
+		return "next_level"
+	return "ignore"
+
+
+func _on_primary_action() -> void:
+	match primary_action():
+		"stop_replay":
+			_replaying = false
+			if touch_controls != null:
+				touch_controls.set_replay_playing(false)
+			_reset_to_start()
+		"restart":
+			_restart()
+		"next_level":
+			_next_level()
+
+
 func back_action() -> String:
 	# 「返回」该做什么 —— **纯判断**，不产生副作用。
 	# 拆出来是为了能测：其中一个分支会退出游戏，测不了就会变成“没人敢碰”的死代码。
@@ -227,7 +258,33 @@ func _reset_quality_sampling() -> void:
 
 func _on_viewport_resized() -> void:
 	_update_safe_area()
+	_apply_tv_ui_scale()
 	_refresh_bands()
+
+
+func _is_tv_like() -> bool:
+	# 「移动平台 + 没有触摸屏」= 电视 / 电视盒子（见 ui_layout.is_tv_like 的说明）
+	#
+	# GF_FORCE_TV=1/0 是**排障与预览开关**：桌面二进制的 OS.has_feature("mobile") 永远为假，
+	# 所以想在显示器上预览电视布局（10 尺字号、5% 过扫描边距）或为它写截图测试，
+	# 必须有个显式覆盖。默认不设置 = 按真实环境判断。
+	var forced: String = OS.get_environment("GF_FORCE_TV")
+	if forced == "1":
+		return true
+	if forced == "0":
+		return false
+	return UiLayout.is_tv_like(OS.has_feature("mobile"), DisplayServer.is_touchscreen_available())
+
+
+func _apply_tv_ui_scale() -> void:
+	# 10 尺 UI：电视要隔三米看，同样的像素尺寸在 4K 电视上小得看不清。
+	# 用 Window.content_scale_factor 整体放大 UI（3D 仍按原生分辨率渲染，棋盘不变形），
+	# 于是 HUD / 选关 / 庆祝层一起变大，不用一处一处改字号。
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var want: float = UiLayout.tv_ui_scale(minf(vp.x, vp.y)) if _is_tv_like() else 1.0
+	var win := get_window()
+	if win != null and not is_equal_approx(win.content_scale_factor, want):
+		win.content_scale_factor = want
 
 
 func _update_safe_area() -> void:
@@ -249,6 +306,9 @@ func _update_safe_area() -> void:
 				"bottom": float(maxi(win.y - area.position.y - area.size.y, 0)) * sc.y,
 			}
 	var ins: Dictionary = UiLayout.safe_insets(vp_size, raw)
+	# 电视会裁掉四周约 5%（过扫描），而系统安全区在电视上通常报 0 → 兜一个下限
+	if _is_tv_like():
+		ins = UiLayout.apply_tv_floor(ins, vp_size)
 	if UiLayout.insets_equal(ins, _safe_insets):
 		return
 	_safe_insets = ins
@@ -389,6 +449,9 @@ func _refresh_bands() -> void:
 			base = "掉出棋盘或落入空洞会坠落"
 		else:
 			base = "掉出棋盘或落入空洞会坠落　·　右下：重开 / 选关 / 回放"
+	elif _is_tv_like():
+		# 电视遥控器上没有 R / L / V，写了等于没写 —— 只提示真正可用的键
+		base = "遥控器方向键移动　·　确认重开或继续　·　返回选关　·　掉出棋盘或落入空洞会坠落"
 	else:
 		base = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     ·     掉出棋盘或落入空洞会坠落"
 	help_label.text = base
@@ -899,12 +962,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_P:
 				_prev_level()
 				return
+		# 确认键：Enter / 小键盘 Enter / 空格。电视遥控器的 OK 键也被 Godot 映射成
+		# KEY_ENTER，所以这一条同时覆盖「遥控器确认」与「键盘回车」。
+		if event.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
+			_on_primary_action()
+			return
 		# 数字键 1-9：跳到已解锁的关卡
 		var num_keys: Array = [KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9]
 		var idx: int = num_keys.find(event.keycode)
 		if idx >= 0:
 			if progress.is_unlocked(idx, _level_keys()):
 				_do_load(idx)
+			return
+	elif event is InputEventJoypadButton and event.pressed:
+		# 手柄 / 部分电视遥控器的确认键（A 或 Start）
+		if event.button_index in [JOY_BUTTON_A, JOY_BUTTON_START]:
+			_on_primary_action()
 			return
 	var d: Vector3i = game.event_to_dir(event)
 	if d != Vector3i.ZERO:

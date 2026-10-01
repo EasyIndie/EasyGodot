@@ -129,6 +129,10 @@ func open_with(entries: Array, progress) -> void:
 	_open = true
 	visible = true
 	_subtitle.text = "%d / %d 关　·　恭喜你，滚方块大师" % [entries.size(), entries.size()]
+	# 初始焦点落在第一个按钮上，遥控器/键盘立刻可用
+	var first: Node = _buttons.get_child(0) if _buttons.get_child_count() > 0 else null
+	if first is Button:
+		(first as Button).grab_focus()
 	_build_stats(entries, progress)
 	_apply_layout()
 	_play_intro()
@@ -325,7 +329,9 @@ func _apply_layout() -> void:
 func _make_button(text: String) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.focus_mode = Control.FOCUS_NONE
+	# 可聚焦：电视遥控器 / 手柄只能靠「焦点 + 确认键」操作，
+	# 设成 FOCUS_NONE 的话庆祝层在电视上就是个死界面（按什么都没反应）。
+	b.focus_mode = Control.FOCUS_ALL
 	b.mouse_filter = Control.MOUSE_FILTER_STOP
 	b.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
 	var normal := StyleBoxFlat.new()

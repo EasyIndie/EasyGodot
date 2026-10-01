@@ -214,6 +214,66 @@ DISPLAY=:0 workflow/scripts/gf-run.sh -p games/puzzle-core res://tools/make_stor
 
 ---
 
+## 4b. 电视（Android TV / Google TV / 电视盒子）
+
+**结论：能玩，而且大部分是现成的** —— 但有两类工作必须补，否则电视玩家会卡死或看不清。
+
+### 4b.1 已经就绪的部分
+
+| 项 | 为什么本来就对 |
+|---|---|
+| 不显示触屏控件 | 判定是 `DisplayServer.is_touchscreen_available()`，电视没有触摸屏 → 触屏层自动不显示（**不是**按平台名判断的） |
+| 方向键移动 | 遥控器方向键在 Android 上被 Godot 上报成普通按键（`KEY_UP/DOWN/LEFT/RIGHT`），与键盘同一路径 |
+| 选关界面导航 | 它用的是 Godot 内置焦点系统（`grab_focus()` + Button 默认 `ui_accept`），`ui_*` 默认就含手柄 D-pad 与 A 键 |
+
+### 4b.2 这次补的部分
+
+1. **手柄 / 遥控器的三种上报形式都要走通**（`game.gd::event_to_dir`）：
+   - 键盘按键（遥控器方向键）✓
+   - `InputEventJoypadButton` 的 D-pad（部分遥控器/蓝牙手柄）
+   - 左摇杆：**只在越过阈值那一刻**触发一次（直接按阈值判断会「一推走好几格」——轴事件每帧都来）
+2. **确认键必须是上下文相关的**（`main.gd::primary_action()`）——这是电视能不能玩下去的关键：
+   遥控器上没有 `R` 键，**不处理的话掉下去就卡死了**。
+   | 状态 | 确认键（遥控器 OK / Enter / 手柄 A） |
+   |---|---|
+   | 已坠落 | 重开 |
+   | 已通关 | 下一关 |
+   | 回放中 | 停止回放 |
+   | 其余 | 什么都不做（刻意的：对局中弹选关太意外，选关有专门入口） |
+3. **庆祝层的按钮改为可聚焦 + 打开时给初始焦点**：原来写的是 `FOCUS_NONE`，
+   在电视上那就是一个「按什么都没反应」的死界面。
+4. **过扫描（overscan）兜底**：电视会裁掉四周约 5%，而系统安全区在电视上通常报 0
+   → `UiLayout.apply_tv_floor()` 给每边一个「短边 5%」的下限。
+5. **10 尺 UI 缩放**：电视观看距离是手机的十倍，4K 电视上按像素等比会让字小到看不清。
+   用 `Window.content_scale_factor` 整体放大（1080p ×1.15 / 4K ×1.45），
+   3D 仍按原生分辨率渲染（棋盘不会变形），HUD/选关/庆祝层一起变大。
+6. **电视首页入口**：AAB 预设开启 `package/show_in_android_tv=true`（leanback 启动器），
+   否则电视上根本找不到这个应用。
+
+### 4b.3 怎么在显示器上预览电视布局
+
+桌面二进制的 `OS.has_feature("mobile")` 永远为假，所以给了显式开关（也是截图测试用的手段）：
+
+```bash
+GF_FORCE_TV=1 DISPLAY=:0 workflow/godot-bin/godot --path games/puzzle-core --resolution 1920x1080
+```
+
+### 4b.4 电视渠道还需要你操作的部分
+
+- Play Console 里勾选 **Android TV** 表单（并按它的要求补 TV 截图 1920×1080）
+- 商店页的 **TV banner 320×180**：已生成 `store_tv_banner_320x180.png`（Play 的 TV 商店页要用）
+- 注意：**Godot 不会把 banner 打进 APK**（Android 导出没有 banner 选项），
+  所以电视首页上显示的是**应用图标**。要换成真正的电视 banner，需要在 Gradle 构建里加
+  `res/drawable-xhdpi/banner.png` 与 `android:banner` 属性（属于自定义构建范畴，暂未做）
+- 电视盒子芯片普遍偏弱 → 我们的自适应画质会自动降档（`render_quality.gd`）；
+  如果某些盒子连最低档都卡，用 `?lite=1` 的等价物：目前原生侧没有 URL，需要时可以加环境变量开关
+
+### 4b.5 明确没做的（别以为是 bug）
+
+- 遥控器的**长按/双击**语义（本项目都是单次按键）
+- 电视上的**多人/手柄热插拔**处理
+- **TV 专属布局**（例如把 HUD 放到更靠内、按钮更大）：现在是同一套 UI + 缩放
+
 ## 5. ⚠️ 上架前必须解决：内容量只有 20 关
 
 竞品参照（见 08）：Google Play 上的《Bloxorz - Block And Hole》是 **200 关**；

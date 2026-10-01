@@ -88,6 +88,13 @@ func _test_icon_assets() -> void:
 		check(store.get_width() == 512 and store.get_height() == 512,
 			"商店图标必须是 512×512（Play 要求），实际 %d×%d" % [store.get_width(), store.get_height()])
 
+	# 电视 banner：Play 的 TV 商店页要求 320×180
+	var tv := _load_image("res://store_tv_banner_320x180.png")
+	check(tv != null, "store_tv_banner_320x180.png 应存在（Play 的 TV 商店页要求）")
+	if tv != null:
+		check(tv.get_width() == 320 and tv.get_height() == 180,
+			"电视 banner 必须是 320×180，实际 %d×%d" % [tv.get_width(), tv.get_height()])
+
 	# Google Play 特色图片：必须正好 1024×500
 	var feat := _load_image("res://store_feature_1024x500.png")
 	check(feat != null, "store_feature_1024x500.png 应存在")
@@ -153,6 +160,9 @@ func _test_export_presets() -> void:
 		check(bool(cfg.get_value(o, "gradle_build/use_gradle_build", false)) == true,
 			"AAB 导出必须启用 Gradle 构建（否则 Play 不认）")
 		check(str(cfg.get_value(aab_sec, "export_path", "")).ends_with(".aab"), "AAB 预设的导出路径应以 .aab 结尾")
+		# 电视（Android TV / Google TV）要能被电视首页发现，否则等于不支持
+		check(bool(cfg.get_value(o, "package/show_in_android_tv", false)) == true,
+			"AAB 预设应开启 package/show_in_android_tv（电视上才找得到）")
 		check(bool(cfg.get_value(o, "screen/immersive_mode", false)) == true,
 			"Android 应开启沉浸模式（隐藏系统栏，全屏游戏）")
 		check(bool(cfg.get_value(o, "package/signed", false)) == true, "Android 导出必须签名")

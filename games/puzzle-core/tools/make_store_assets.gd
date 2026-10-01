@@ -25,6 +25,7 @@ extends SceneTree
 const OUT_ICON := "res://icon.png"
 const OUT_STORE_ICON := "res://store_icon_512.png"
 const OUT_FEATURE := "res://store_feature_1024x500.png"
+const OUT_TV_BANNER := "res://store_tv_banner_320x180.png"
 
 const FILL_ICON := 0.72    # 图标内容占画布短边的比例（留系统圆角遮罩的安全边）
 const FILL_FEATURE := 0.88
@@ -39,8 +40,10 @@ func _run() -> void:
 	ok = await _render(1024, 1024, "icon", OUT_ICON) and ok
 	ok = await _render(512, 512, "icon", OUT_STORE_ICON) and ok
 	ok = await _render(1024, 500, "feature", OUT_FEATURE) and ok
+	# 电视 banner：Play 的 TV 商店页要求 320×180（等比缩小同一构图，小尺寸下依然认得出）
+	ok = await _render(320, 180, "feature", OUT_TV_BANNER) and ok
 	var report: Dictionary = {}
-	for p in [OUT_ICON, OUT_STORE_ICON, OUT_FEATURE]:
+	for p in [OUT_ICON, OUT_STORE_ICON, OUT_FEATURE, OUT_TV_BANNER]:
 		var img := Image.load_from_file(ProjectSettings.globalize_path(p))
 		report[p.get_file()] = [img.get_width(), img.get_height()] if img != null else []
 	print(JSON.stringify({"status": "ok" if ok else "fail", "assets": report}))

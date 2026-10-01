@@ -13,6 +13,7 @@ var failures: int = 0
 
 
 func _init() -> void:
+	_test_tv()
 	_test_camera_desktop_unchanged()
 	_test_camera_portrait()
 	_test_camera_always_fits()
@@ -43,6 +44,31 @@ func _visible_half_width(s: float, aspect: float) -> float:
 
 
 # ---- 测试组 ----
+
+func _test_tv() -> void:
+	# 电视判定：移动平台 + 没有触摸屏。
+	# 用「有没有触摸屏」而不是平台名，是因为 Godot 没有「是不是 TV」的 API，
+	# 而这条规则在「平板外接手柄」这类情况下也不会误判（不显示触屏层是对的）。
+	check(L.is_tv_like(true, false), "移动平台且无触摸屏应判定为电视")
+	check(not L.is_tv_like(true, true), "手机/平板有触摸屏 → 不是电视")
+	check(not L.is_tv_like(false, false), "桌面无触摸屏 → 不是电视（有键盘鼠标）")
+
+	# 过扫描下限：电视会裁掉四周约 5%
+	check(is_equal_approx(L.tv_min_margin(Vector2(1920, 1080)), 54.0),
+		"1080p 短边 1080 × 5% = 54")
+	check(is_equal_approx(L.tv_min_margin(Vector2(3840, 2160)), 108.0), "4K 短边 2160 × 5% = 108")
+	var floored: Dictionary = L.apply_tv_floor({"left": 10.0, "top": 0.0, "right": 90.0, "bottom": 0.0},
+		Vector2(1920, 1080))
+	check(is_equal_approx(float(floored["left"]), 54.0), "小于下限的边距应被抬到 54")
+	check(is_equal_approx(float(floored["right"]), 90.0), "已经更大的边距不该被改小")
+	check(is_equal_approx(float(floored["bottom"]), 54.0), "为 0 的边距应被抬到下限")
+
+	# 10 尺 UI 缩放：4K 电视不能沿用 1080p 的字号
+	check(is_equal_approx(L.tv_ui_scale(2160.0), L.TV_SCALE_UHD), "4K → UHD 档")
+	check(is_equal_approx(L.tv_ui_scale(1080.0), L.TV_SCALE_1080), "1080p → 1080 档")
+	check(is_equal_approx(L.tv_ui_scale(720.0), 1.0), "小屏不放大（手机用默认档）")
+	check(L.tv_ui_scale(2160.0) > L.tv_ui_scale(1080.0), "越大屏放大越多")
+
 
 func _test_camera_desktop_unchanged() -> void:
 	# 16:9 下必须与旧的固定取景（距离 = 格数 × 1.909）几乎一致，保证桌面观感不变

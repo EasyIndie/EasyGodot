@@ -124,3 +124,44 @@ static func insets_equal(a: Dictionary, b: Dictionary) -> bool:
 		if absf(float(a.get(k, 0.0)) - float(b.get(k, 0.0))) > 0.5:
 			return false
 	return true
+
+
+# ── 电视（Android TV / Google TV / 电视盒子）────────────────────────
+#
+# 判定「像电视」的依据不是平台名，而是**这台设备没有触摸屏但确实是移动平台**：
+#   手机/平板 = mobile + 有触摸屏
+#   电视/盒子 = mobile + 没有触摸屏（遥控器/手柄输入）
+# 这样不需要任何「是不是 TV」的专用 API（Godot 也没提供），
+# 而且在「安卓平板外接手柄」这类边缘情况下的表现也是合理的（不显示触屏层）。
+const TV_MIN_RATIO := 0.05           # 电视过扫描：内容至少留出短边的 5%
+const TV_SCALE_1080 := 1.15          # 1080p 电视：UI 略微放大
+const TV_SCALE_UHD := 1.45           # 4K 电视：像素密度更高，按键/字号必须更大才不会“看着累”
+
+
+static func is_tv_like(is_mobile: bool, has_touchscreen: bool) -> bool:
+	return is_mobile and not has_touchscreen
+
+
+static func tv_min_margin(viewport: Vector2) -> float:
+	# 电视会裁掉四周约 5%（过扫描）。系统安全区在电视上通常报 0，
+	# 所以要我们自己兜一个下限，否则贴边的 HUD 会被电视物理裁掉。
+	return maxf(minf(viewport.x, viewport.y) * TV_MIN_RATIO, 0.0)
+
+
+static func apply_tv_floor(insets: Dictionary, viewport: Vector2) -> Dictionary:
+	# 把电视最小边距并进现有的安全区结果（取两者较大值，不叠加）
+	var m: float = tv_min_margin(viewport)
+	var out: Dictionary = insets.duplicate()
+	for k in ["left", "top", "right", "bottom"]:
+		out[k] = maxf(float(out.get(k, 0.0)), m)
+	return out
+
+
+static func tv_ui_scale(short_side: float) -> float:
+	# 10 尺 UI：电视的观看距离是手机的十倍，UI 不能只按像素等比，
+	# 否则 4K 电视上「一个字占屏 1%」等于看不清。按短边分档放大。
+	if short_side >= 1800.0:
+		return TV_SCALE_UHD
+	if short_side >= 900.0:
+		return TV_SCALE_1080
+	return 1.0
