@@ -29,12 +29,21 @@ export GODOT_SILENCE_ROOT_WARNING=1
 # 所以这里先查一遍并给出可执行的修复命令，而不是让导出在半路报一句难懂的错。
 _android_precheck() {
 	local kind="$1"
-	local settings="${GODOT_EDITOR_SETTINGS:-$HOME/.config/godot/editor_settings-4.tres}"
+	# 设置文件名是**版本化**的（Godot 4.7 用 editor_settings-4.7.tres）。
+	# 这里曾经写死 editor_settings-4.tres → 明明配好了却报“没有配置”（真实 bug）。
+	local settings="${GODOT_EDITOR_SETTINGS:-}"
+	if [ -z "$settings" ]; then
+		settings="$(ls -1t "$HOME"/.config/godot/editor_settings-*.tres 2>/dev/null | head -1 || true)"
+		[ -z "$settings" ] && settings="$HOME/.config/godot/editor_settings-4.tres"
+	fi
 	local sdk_tmp="" java_tmp=""
 	[ -f "$settings" ] && {
 		sdk_tmp="$(grep -o 'android/android_sdk_path = "[^"]*"' "$settings" | sed 's/.*= "//; s/"$//')"
 		java_tmp="$(grep -o 'android/java_sdk_path = "[^"]*"' "$settings" | sed 's/.*= "//; s/"$//')"
 	}
+	# 路径存在才算配好：只有路径但目录没了（换机器/删缓存）是最常见的“配了却导出失败”
+	[ -n "$sdk_tmp" ] && [ ! -d "$sdk_tmp/build-tools" ] && sdk_tmp=""
+	[ -n "$java_tmp" ] && [ ! -x "$java_tmp/bin/keytool" ] && java_tmp=""
 	if [ -z "${sdk_tmp:-}" ] && [ -z "${ANDROID_SDK_ROOT:-}" ]; then
 		echo "!! 没有配置 Android SDK 路径，导出会失败。" >&2
 		echo "   1) 安装 Android SDK（cmdline-tools + platform-tools + build-tools）与 OpenJDK 17" >&2

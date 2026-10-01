@@ -57,6 +57,12 @@ func _test_project_settings() -> void:
 	check(int(ProjectSettings.get_setting("display/window/handheld/orientation", 0)) == 6,
 		"handheld/orientation 应为 6（传感器/横竖屏都支持）")
 
+	# ETC2/ASTC 纹理压缩：**Android 导出硬要求**。缺了它会直接报
+	# "ETC2/ASTC texture compression is required for Android export" 并拒绝出包
+	# （实测踩过；这条设置是导出时才发现必需的，所以必须被测试守住）
+	check(ProjectSettings.get_setting("rendering/textures/vram_compression/import_etc2_astc", false) == true,
+		"必须开启 rendering/textures/vram_compression/import_etc2_astc（Android 导出硬要求）")
+
 	# 商店要展示版本号与名称
 	check(str(ProjectSettings.get_setting("application/config/version", "")) != "",
 		"config/version 不能为空（商店与 AAB 版本号要用）")
@@ -150,6 +156,12 @@ func _test_export_presets() -> void:
 		check(bool(cfg.get_value(o, "screen/immersive_mode", false)) == true,
 			"Android 应开启沉浸模式（隐藏系统栏，全屏游戏）")
 		check(bool(cfg.get_value(o, "package/signed", false)) == true, "Android 导出必须签名")
+		# 目标架构必须显式声明：不写的话 Godot 只会打进 arm64-v8a（实测）。
+		# arm64 是 Play 的硬要求（64 位）；armeabi-v7a 覆盖老机型（Play 按设备下发，不多占用户流量）。
+		check(bool(cfg.get_value(o, "architectures/arm64-v8a", false)) == true,
+			"AAB 必须包含 arm64-v8a（Google Play 要求 64 位）")
+		check(bool(cfg.get_value(o, "architectures/armeabi-v7a", false)) == true,
+			"AAB 应包含 armeabi-v7a（覆盖 32 位老机型）")
 		var pkg := str(cfg.get_value(o, "package/unique_name", ""))
 		check(pkg != "" and not pkg.begins_with("com.example"), "包名必须是真的（不能留 com.example）: " + pkg)
 		check(pkg.split(".").size() >= 2, "包名应形如 com.xxx.yyy: " + pkg)
@@ -167,6 +179,11 @@ func _test_export_presets() -> void:
 		check(int(cfg.get_value(apk_sec + ".options", "gradle_build/export_format", -1)) == 0,
 			"APK 预设有导出格式应为 APK（0）")
 		check(str(cfg.get_value(apk_sec, "export_path", "")).ends_with(".apk"), "APK 预设路径应以 .apk 结尾")
+		# 试玩包要能同时装真机与模拟器
+		check(bool(cfg.get_value(apk_sec + ".options", "architectures/arm64-v8a", false)) == true,
+			"APK 预设应包含 arm64-v8a（真机）")
+		check(bool(cfg.get_value(apk_sec + ".options", "architectures/x86_64", false)) == true,
+			"APK 预设应包含 x86_64（模拟器）")
 
 	# 桌面/网页预设不能被这次改动弄坏
 	check(by_name.has("Web") and by_name.has("Linux") and by_name.has("Windows"),

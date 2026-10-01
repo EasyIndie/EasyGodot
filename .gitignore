@@ -22,7 +22,9 @@ games/*/_*.png.import
 *.jks
 *.p12
 *.mobileprovision
-# Godot 的 Android 构建模板（由 --install-android-build-template 生成）
+# Godot 的 Android 构建模板 + Gradle 缓存/产物。
+# **实测 1.3GB**（含 .gradle 缓存），且一条命令就能重建，绝不能入库。
+games/*/android/
 android/build/
 # 生成的移动端产物
 games/*/build/android/

@@ -72,5 +72,12 @@ lights_and_shadows/directional_shadow/soft_shadow_filter_quality=1
 ; 3) 本作没有位置光源，但把图集尺寸一并压低，避免默认值被意外分配
 lights_and_shadows/positional_shadow/atlas_size=1024
 ;
-; 4) 纹理：本作是纯色材质 + 程序化渐变，没有需要 mipmap 的贴图；
+; 4) ETC2/ASTC 纹理压缩：**Android 导出硬要求**（Godot 会直接报
+;    "ETC2/ASTC texture compression is required for Android export" 并拒绝出包）。
+;    Android 设备的 GPU 需要 ETC2/ASTC 格式的纹理，Godot 必须把它一起打进 pck。
+;    代价：每张纹理会多一份压缩版本。本作几乎没有贴图（只有图标），所以代价可忽略；
+;    将来若加了大量贴图，要重新评估包体。
+textures/vram_compression/import_etc2_astc=true
+
+; 5) 纹理：本作是纯色材质 + 程序化渐变，没有需要 mipmap 的贴图；
 ;    保持默认（线性过滤）即可，不额外开关。

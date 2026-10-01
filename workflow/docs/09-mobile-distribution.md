@@ -21,7 +21,7 @@
 | 切后台 / 恢复 | ✅ 清掉自适应画质采样，避免回来后画质被一次打到底 |
 | 导出预设 | ✅ Android (AAB)、Android (APK)、iOS 三个预设已写好 |
 | 守卫测试 | ✅ `tests/test_mobile.gd`（42 断言）：商店格式、包名一致性、素材尺寸 |
-| Android 构建 | ⏳ 只差本机装 SDK/JDK（本文 §1） |
+| Android 构建 | ✅ **已跑通**（APK 55MB 装真机/模拟器；AAB 51MB 可上架，签名已用 `jarsigner` 验证） |
 | iOS 构建 | ⏳ **必须有 macOS**（本文 §2） |
 | 上架素材与商店后台 | ⏳ 需要你操作（本文 §3） |
 | 内容量（20 关 vs 竞品 200 关） | ⚠️ **上架前要扩**（本文 §5） |
@@ -89,6 +89,44 @@ workflow/scripts/gf-export.sh games/puzzle-core android
 缺什么就直接告诉你补哪一条命令 —— 而不是让你在导出中途看一句天书。
 
 ---
+
+### 1.6 实测结果（本机已跑通，2026-10）
+
+```
+build/android/puzzle-core.apk   55MB   ABI: arm64-v8a + x86_64     签名: debug（CN=Godot）
+build/android/puzzle-core.aab   51MB   ABI: arm64-v8a + armeabi-v7a 签名: jar verified ✓
+包名 com.easyindie.puzzlecore · versionCode=1 · versionName=0.1.0 · minSdk=24 · targetSdk=36
+应用名 Puzzle Core · 权限: 无 · screenOrientation=13（fullUser，横竖屏都允许）
+```
+
+装到手机上试玩：
+
+```bash
+adb install -r games/puzzle-core/build/android/puzzle-core.apk
+# 或者直接把 build/android/puzzle-core.apk 拷到手机点开安装（需允许“未知来源”）
+```
+
+核验成品（包名一致性 / 64 位 / 图标 / 权限 / 方向 / 签名）——**导出成功不等于能上架**，所以这条要单独跑：
+
+```bash
+workflow/scripts/gf-android-verify.sh            # 自动挑 build/android 下的产物
+workflow/scripts/gf-android-verify.sh <包路径>
+```
+
+### 1.7 实测踩到的四个坑（都已修，别再踩）
+
+| 坑 | 症状 | 结论 |
+|---|---|---|
+| `--install-android-build-template` 单独用 | 毫无输出、也不生成 `android/`，退出码 0 | 它是**编辑器**开关，必须与导出一起用：`--headless --editor --install-android-build-template --export-release "Android (AAB)" …` |
+| **缺 ETC2/ASTC 设置** | 导出直接被拒：`ETC2/ASTC texture compression is required for Android export` | 必须开 `rendering/textures/vram_compression/import_etc2_astc=true`（已写进 project.godot，并有测试守着） |
+| **ABI 没显式声明** | 出包只有 `arm64-v8a`（模板里其实有 4 个 ABI） | Godot 读的是预设里的 `architectures/<abi>` 键，**必须显式写**；上架包给 arm64+armv7，试玩包给 arm64+x86_64 |
+| 编辑器设置文件名写死 | 明明配好了却报「没有配置 Android SDK」 | 文件名是**版本化**的（`editor_settings-4.7.tres`），要 glob 找最新的那个（`gf-export.sh` 已修） |
+
+另外两条经验：
+- `aapt2 dump badging` 里 minSdk 那行**两种拼写**都出现过（`sdkVersion:'24'` / `minSdkVersion:'24'`），
+  只匹配一种会静默取到空值 —— `gf-android-verify.sh` 现在两种都接受。
+- **AAB 不需要你手工做任何签名工作**（Play App Signing 会托管最终签名），
+  但上传包必须用你的 key 签过 —— `jarsigner -verify` 能验（看到 `jar verified.` 即可）。
 
 ## 2. iOS：**必须有 macOS**（技术上绕不过）
 
@@ -235,7 +273,13 @@ workflow/scripts/gf-export.sh games/puzzle-core android-apk   # 本机试玩
 workflow/scripts/gf-export.sh games/puzzle-core android       # 上架用 AAB
 workflow/scripts/gf-export.sh games/puzzle-core ios           # 仅 macOS
 
-# 移动端配置守卫（商店格式 / 包名 / 素材尺寸）
+# 核验成品包（包名一致性 / 64 位 / 图标 / 权限 / 方向 / 签名）
+workflow/scripts/gf-android-verify.sh
+
+# 装到手机（或把 apk 拷过去直接点安装）
+adb install -r games/puzzle-core/build/android/puzzle-core.apk
+
+# 移动端配置守卫（商店格式 / 包名 / ABI / ETC2 / 素材尺寸）
 workflow/scripts/gf-run.sh -p games/puzzle-core res://tests/test_mobile.gd
 ```
 
