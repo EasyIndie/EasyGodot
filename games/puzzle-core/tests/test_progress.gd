@@ -148,7 +148,7 @@ func _test_best_time() -> void:
 	check(int(r1["time_ms"]) == 20000, "返回值应回传本局用时")
 	check(bool(r1["time_improved"]), "首次计时算破纪录")
 	check(int(pr.best_time("level_01")) == 20000, "最快时间应被记录")
-	check(pr.best_labels("level_01") == 6, "步数记录不受计时影响")
+	check(pr.best_moves("level_01") == 6, "步数记录不受计时影响")
 
 	# 更慢但步数更少：步数纪录刷新，时间纪录**不该**被改坏（这是最容易写错的地方）
 	var r2: Dictionary = pr.record_win("level_01", _labels(4), 35000)
@@ -163,7 +163,7 @@ func _test_best_time() -> void:
 	check(not bool(r3["improved"]), "步数更多不应刷新步数纪录")
 	check(bool(r3["time_improved"]), "更快的一局应刷新时间纪录")
 	check(int(pr.best_time("level_01")) == 12000, "最快时间应更新为 12000")
-	check(pr.best_labels("level_01") == 4, "最快时间不能反向改坏步数纪录")
+	check(pr.best_moves("level_01") == 4, "最快时间不能反向改坏步数纪录")
 
 	# 落盘后重新读取
 	var pr2 = Progress.new(tmp)

@@ -30,6 +30,7 @@ var _best: Dictionary = {}        # {key: int}  最佳步数
 var _best_time: Dictionary = {}   # {key: int}  最快用时（毫秒）
 var _replays: Dictionary = {}     # {key: {moves: Array[String], move_count: int, at: int}}
 var _runs: Dictionary = {}        # {key: [{moves: int, at: int}, ...]} 按步数升序，本机榜
+var _ghost: bool = false          # 偏好：是否显示「上次的走法」影子（默认关，避免剧透）
 
 
 func _init(p_path: String = DEFAULT_PATH) -> void:
@@ -76,6 +77,7 @@ func _read() -> void:
 				"move_count": int(r.get("move_count", mv.size())),
 				"at": int(r.get("at", 0)),
 			}
+	_ghost = bool(d.get("ghost", false))
 	for k in d.get("runs", {}):
 		var arr = d["runs"][k]
 		if arr is Array:
@@ -118,6 +120,7 @@ func save() -> bool:
 		"best_times": _best_time,
 		"replays": _replays,
 		"runs": _runs,
+		"ghost": _ghost,
 	}, "\t"))
 	f.close()
 	return true
@@ -173,6 +176,16 @@ func replay(key: String) -> Dictionary:
 func runs(key: String) -> Array:
 	# 本机榜（按步数升序，最多 MAX_RUNS 条）
 	return _runs.get(key, [])
+
+
+func ghost_enabled() -> bool:
+	return _ghost
+
+
+func set_ghost_enabled(on: bool) -> void:
+	# 玩家偏好，和记录一起存在进度文件里（下次启动仍然是他的选择）
+	_ghost = on
+	save()
 
 
 func is_unlocked(index: int, keys: Array) -> bool:
@@ -244,4 +257,5 @@ func reset() -> void:
 	_best_time.clear()
 	_replays.clear()
 	_runs.clear()
+	_ghost = false
 	save()

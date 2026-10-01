@@ -57,6 +57,14 @@ workflow/scripts/gf-run.sh -p games/puzzle-core res://tests/test_core.gd
 
 stdout 输出 `{"checks":N,"failures":M,"status":"ok|fail"}`，失败时退出码非 0，错误信息在 stderr。
 
+**判绿的三条依据（缺一不可）**：`gf-test.sh` 同时检查
+① 退出码、② 套件自报的 `failures`、③ **输出里有没有 `SCRIPT ERROR` / 载入失败**。
+
+> 第 ③ 条是真实踩过的坑：GDScript 的运行期错误会让协程**静默中断**，套件照样打印
+> `{"status":"ok","failures":0}`（只是断言数变少）—— 于是 CI 全绿却什么都没测，
+> 甚至同时掩盖了另一个套件里的同类错误。**永远不要只信测试自己报的结论**，
+> 让流水线去判「有没有报错」。
+
 ## 关卡质检（门禁）
 
 ```bash

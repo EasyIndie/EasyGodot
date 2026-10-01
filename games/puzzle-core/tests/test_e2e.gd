@@ -49,6 +49,7 @@ func _run() -> void:
 	await _test_mobile_back()
 	await _test_tv_input()
 	await _test_clock()
+	await _test_ghost()
 	ProjectSettings.set_setting("puzzle/progress_path", "")
 	_remove_tmp(SUITE_SAVE)
 	_report_and_quit()
@@ -606,6 +607,133 @@ func _test_mobile_back() -> void:
 	await create_timer(0.25).timeout
 	scene.free()
 	_remove_tmp(tmp)
+
+
+func _test_ghost() -> void:
+	# 「影子」= 把自己的最佳走法当幽灵滚一遍。两条硬约束：
+	#   ① **绝不许碰玩家的任何状态**（走错一步就是「我在下棋，棋盘自己动了」）
+	#   ② 运动必须与玩家方块**同一套模型**（否则会出现两种翻滚表现 —— 这个项目的旧坑）
+	var tmp := "user://test_e2e_ghost.json"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	await create_timer(0.1).timeout
+	scene.game.animate = true
+
+	# 先解出第 1 关的解法（用它当“最佳记录”）
+	var sol: Dictionary = Solver.new(scene.game.board, scene.game.state).solve()
+	check(bool(sol["solvable"]), "第 1 关应有解")
+	# 回放数据本身就是方向标签数组（solver 的 solution 与 progress 里存的 moves 同一格式），
+	# 所以不需要任何转换 —— 影子直接吃「最佳记录」的原样数据
+	var labels: Array = sol["solution"]
+
+	# 影子结构：开关、半透明、不投影
+	scene.game.set_ghost_enabled(true)
+	check(scene.game.ghost_visible(), "开启后影子应可见")
+	check(scene.game.ghost_mesh_count() == scene.game.state.world_cells().size(),
+		"影子单元数应与该关起点形状一致（实际 %d）" % scene.game.ghost_mesh_count())
+	var translucent := true
+	var casting := false
+	for c in scene.game._ghost.get_children():
+		var mi := c as MeshInstance3D
+		if mi.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+			casting = true
+		var bm := (mi.mesh as BoxMesh)
+		if bm != null and (bm.material as StandardMaterial3D) != null:
+			if (bm.material as StandardMaterial3D).albedo_color.a > 0.7:
+				translucent = false
+	check(translucent, "影子必须是半透明的（否则会被当成实体方块）")
+	check(not casting, "影子不投影（影子不该在地面上再投一层影子）")
+
+	# 先等玩家自己的入场下落演完再采样：否则会把「玩家入场动画」误判成影子的干扰
+	while scene.game.animating:
+		await process_frame
+	# 播放：逐帧记录「玩家方块 / 影子」的位置，验证两者互不干扰
+	var player_before: Vector3 = _centroid(scene.game.block_mesh_centers())
+	var state_before: Array = scene.game.state.world_cells()
+	var moves_before: int = scene.game.move_count
+	var player_pts: Array = []
+	var ghost_pts: Array = []
+	var ghost_moves: Array = []
+	var ghost_off_grid := 0
+	scene.game.play_ghost(labels)
+	while scene.game.ghost_busy():
+		player_pts.append(_centroid(scene.game.block_mesh_centers()))
+		var g: Vector3 = scene.game.ghost_center()
+		if g != Vector3.INF:
+			ghost_pts.append(g)
+			ghost_moves.append(scene.game.ghost_move_index())
+			if _off_grid(g):
+				ghost_off_grid += 1
+		await process_frame
+	await create_timer(0.1).timeout
+
+	# ① 玩家状态完全没被碰过
+	check(_centroid(scene.game.block_mesh_centers()).distance_to(player_before) < 0.01, "影子播放期间玩家方块不能动")
+	check(scene.game.state.world_cells() == state_before, "影子播放期间玩家状态不能变")
+	check(scene.game.move_count == moves_before, "影子播放期间玩家步数不能变")
+	check(not scene.game.won_flag and not scene.game.lost_flag, "影子播放不能触发通关/坠落")
+	var moved_player := false
+	for p in player_pts:
+		if (p as Vector3).distance_to(player_before) > 0.01:
+			moved_player = true
+	check(not moved_player, "影子播放期间玩家方块逐帧都不得移动")
+
+	# ② 影子真的在滚（过程中离开格点 = 真旋转，而不是瞬移）
+	check(ghost_off_grid > 0, "影子必须有「离开格点」的中间帧（否则是瞬移）")
+	check(ghost_pts.size() > 3, "应采到影子移动的多个帧")
+
+	# ③ 与玩家方块同一套运动模型：逐帧位移不能超过翻滚速度上限
+	# 「有没有真在演动画」的判据：
+	#   ① 每一步都必须出现「质心离开半整数格点」的帧（只有真旋转才会离格，瞬移不会）
+	#   ② 相邻两帧的位移不能超过「单次翻滚的弦长」（瞬移/错位会远远超过）
+	#
+	# 为什么不按 dt 算速度：headless/WSL 下会出现很长的帧（实测有过 1.8 秒的单帧），
+	# 而这一帧里引擎给 tween 的 delta 与 Time.get_ticks_msec() 的差值会对不上
+	# —— 速度断言因此会随机假失败。按「步」分组则完全不受帧长影响。
+	var per_move: Dictionary = {}
+	for i in range(ghost_pts.size()):
+		var mi: int = int(ghost_moves[i])
+		if not per_move.has(mi):
+			per_move[mi] = false
+		if _off_grid(ghost_pts[i]):
+			per_move[mi] = true
+	var silent: Array = []
+	for mi in per_move.keys():
+		if mi >= 1 and not bool(per_move[mi]):
+			silent.append(mi)
+	check(silent.is_empty(),
+		"影子每一步都要有翻滚中间帧（这些步没有：%s）" % str(silent))
+
+	var jumped := 0
+	var worst_jump := 0.0
+	for i in range(1, ghost_pts.size()):
+		var dist: float = (ghost_pts[i] as Vector3).distance_to(ghost_pts[i - 1] as Vector3)
+		if dist > 1.2:
+			jumped += 1
+			worst_jump = maxf(worst_jump, dist)
+	check(jumped == 0, "相邻帧位移不能超过单次翻滚的弦长（%d 帧超限，最大 %.2f 格）"
+		% [jumped, worst_jump])
+
+	# 回归：幽灵的网格**不能**被算进「玩家方块画在哪里」
+	# （_rig_meshes 曾用名字后缀匹配 rig，把 GhostRig 也算进来了 → 读到的位置是两者混合）
+	check(scene.game.block_mesh_count() == scene.game.state.world_cells().size(),
+		"幽灵在场上时，玩家方块的网格数不能被幽灵污染（%d vs %d）"
+			% [scene.game.block_mesh_count(), scene.game.state.world_cells().size()])
+
+	# ④ 影子停在终点：说明「最佳回放数据」确实能解开这一关
+	check(scene.game.ghost_at_goal(), "按最佳记录滚完后影子应停在目标格上")
+
+	# ⑤ 关掉后不可见；换关后自动回到起点
+	scene.game.set_ghost_enabled(false)
+	check(not scene.game.ghost_visible(), "关闭后影子应不可见")
+	scene.game.set_ghost_enabled(true)
+	check(scene.game.ghost_at_goal() == false, "重新开启应复位到起点（而不是停在终点）")
+
+	scene.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
 
 
 func _test_clock() -> void:

@@ -35,6 +35,7 @@ const COLOR_GOAL_RING := Color(0.35, 1.00, 0.70) # 目标“光圈”（嵌在�
 
 # 落地回弹的挤压幅度：很小的数值就有明显的“重量感”，是性价比最高的一档手感反馈
 const LAND_SQUASH := 0.16
+const GHOST_ALPHA := 0.34   # 幽灵透明度：能看清走法，又不至于被当成实体方块
 const SPAWN_HEIGHT := 7.0      # 重开时方块落下的起始高度
 const SPAWN_TIME := 0.38       # 落下时长
 
@@ -61,6 +62,19 @@ var animating: bool = false
 var animate: bool = true     # false = 同步（测试用）
 var _stick_prev: Dictionary = {}   # 左摇杆各轴的上一次取值（边沿触发用）
 var low_effects: bool = false  # 低端 GPU / 排障：停掉逐帧材质更新
+# ── 幽灵影子（「上次的走法」）──────────────────────────
+# 它**不是**比赛用的对手：解谜游戏的成绩是**步数**，不是时间，而回放里没有记录
+# 每一步之间的思考停顿，「跟你自己赛跑」在解谜里既不公平也没意义。
+# 它真正解决的问题是：回到一个隔了很久的关卡，想不起来上次怎么走的
+# —— 于是它把「上次的走法」连续滚一遍当记忆辅助（opt-in，默认关）。
+var _ghost: Node3D = null          # 幽灵根节点（挂在质心的 pivot 上）
+var _ghost_state = null            # 幽灵自己的状态（与玩家 state 完全独立）
+var _ghost_start: Dictionary = {}  # 本关起点（重播时复位用）
+var _player_rig: Node3D = null     # 玩家方块正在翻滚/坠落时承载单元网格的 rig
+var _ghost_rig: Node3D = null      # 幽灵自己那份（两者绝不能混在一起，见 _rig_meshes）
+var _ghost_epoch: int = 0          # 换关/关闭时自增，用来打断还在跑的播放协程
+var _ghost_busy: bool = false
+var _ghost_moves: int = 0          # 幽灵已经滚了几步（测试按它给帧分组，见 ghost_move_index）
 var move_count: int = 0
 var _tween: Tween = null
 
@@ -77,6 +91,12 @@ func load_dict(lv: Dictionary) -> bool:
 	_kill_tween()
 	board = lv["board"]
 	state = lv["start"]
+	# 记下本关起点：幽灵重播时要能复位（与玩家 state 各存一份，互不影响）
+	_ghost_start = {
+		"shape": state.shape,
+		"orientation": state.orientation,
+		"position": state.position,
+	}
 	level_id = board.id
 	core = Core.new(board, state)
 	won_flag = false
@@ -202,26 +222,42 @@ func _start_roll(d: Vector3i, st: Dictionary) -> void:
 	#   结果方块在整个翻滚动画里被平移到棋盘外，落点却因为重建而看起来正常。）
 	var rig := Node3D.new()
 	rig.name = "RollRig"
+	_player_rig = rig
 	rig.position = cs   # 立刻摆到质心：tween 要下一帧才求值，不预设会闪一帧世界原点
 	add_child(rig)
 	for cube in _block_meshes().duplicate():
 		_block_pivot.remove_child(cube)
 		rig.add_child(cube)
 
-	var m: Array = Moves.roll_rotation(d)
-	var q_step: Quaternion = Basis(Vector3(m[0]), Vector3(m[1]), Vector3(m[2])).get_rotation_quaternion()
+	var q_step: Quaternion = _rot_quat(d)
 	var pv: Vector3 = st["pivot"]
-	_tween = create_tween()
-	_tween.tween_method(
-		func(t: float) -> void:
-			var q: Quaternion = Quaternion.IDENTITY.slerp(q_step, t * t)  # 角速度递增，模拟重力力矩
-			rig.quaternion = q
-			rig.position = pv + q * (cs - pv),
-		0.0, 1.0, ROLL_TIME)
+	_tween = _roll_motion(rig, cs, pv, q_step, ROLL_TIME)
 	if not supported:
 		var to_cells: Array = st["to_cells"]
 		_append_fall(rig, _cells_center(to_cells), to_cells, q_step, q_step.get_axis(), FALL_EXTRA_SPIN)
 	_tween.finished.connect(_on_anim_finished.bind(rig, supported))
+
+
+func _rot_quat(d: Vector3i) -> Quaternion:
+	# 一步翻滚对应的 90° 旋转（Moves.roll_rotation 返回的是旋转矩阵的三个**基向量列**，
+	# 所以要用 Basis(col_x, col_y, col_z) 这个三参构造）
+	var m: Array = Moves.roll_rotation(d)
+	return Basis(Vector3(m[0]), Vector3(m[1]), Vector3(m[2])).get_rotation_quaternion()
+
+
+func _roll_motion(rig: Node3D, cs: Vector3, pivot: Vector3, q_step: Quaternion, dur: float) -> Tween:
+	# 「绕前下边翻滚 90°」的**唯一**运动模型：new_q = R·q，new_pos = P + R·(cs − P)。
+	# 玩家方块、幽灵影子都走这一个函数 —— 幽灵如果用第二套动画，两者迟早会不一致，
+	# 而「同一动作有两种表现」正是这个项目反复踩过的坑。
+	# rig 的原点必须是质心（cs），这样「绕支点转」与「整块平移」是同一个四元数。
+	var t := create_tween()
+	t.tween_method(
+		func(u: float) -> void:
+			var q: Quaternion = Quaternion.IDENTITY.slerp(q_step, u * u)  # 角速度递增，模拟重力力矩
+			rig.quaternion = q
+			rig.position = pivot + q * (cs - pivot),
+		0.0, 1.0, dur)
+	return t
 
 
 ## 机关扩展点：棋盘改变（如 set_void）后调用。方块脚下已无地面 → 触发「踩空坠落」。
@@ -240,6 +276,7 @@ func check_fall() -> bool:
 	# 同样用刚体节点承载方块（rig 原点 = 质心，单元位置本来就是相对质心的）
 	var rig := Node3D.new()
 	rig.name = "FallRig"
+	_player_rig = rig
 	rig.position = c    # 同上：避免第一帧闪现在世界原点
 	add_child(rig)
 	for cube in _block_meshes().duplicate():
@@ -303,6 +340,7 @@ func _append_fall(rig: Node3D, base_pos: Vector3, cells: Array, q_base: Quaterni
 
 
 func _on_anim_finished(rig: Node3D, supported: bool) -> void:
+	_player_rig = null
 	for cube in rig.get_children().duplicate():
 		rig.remove_child(cube)
 		cube.free()
@@ -479,6 +517,173 @@ func _build_block() -> void:
 	_block_mat = _make_block_material(COLOR_BLOCK)
 
 
+func ghost_visible() -> bool:
+	return _ghost != null and _ghost.visible
+
+
+func set_ghost_enabled(on: bool) -> void:
+	# 开关幽灵结构（不涉及播放）。关掉时立刻打断正在播放的协程。
+	_ghost_epoch += 1
+	_ghost_busy = false
+	_ghost_rig = null
+	if on:
+		if _ghost == null:
+			_build_ghost()
+		_ghost.visible = true
+		_reset_ghost()
+	elif _ghost != null:
+		_ghost.visible = false
+
+
+func _build_ghost() -> void:
+	# 幽灵的渲染刻意与方块**不同**：半透明 + 不投影。
+	# 「影子」的语言必须一眼可辨，否则玩家会以为棋盘上多了个实体方块。
+	_ghost = Node3D.new()
+	_ghost.name = "Ghost"
+	add_child(_ghost)
+
+
+func _ghost_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	var c: Color = COLOR_BLOCK
+	mat.albedo_color = Color(c.r, c.g, c.b, GHOST_ALPHA)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
+
+
+func _reset_ghost() -> void:
+	# 幽灵回到本关起点姿态（只在有起点信息时）
+	if _ghost == null or _ghost_start.is_empty():
+		return
+	_ghost_state = State.new(_ghost_start["shape"], int(_ghost_start["orientation"]), _ghost_start["position"])
+	_ghost_moves = 0
+	_position_ghost()
+
+
+func _position_ghost() -> void:
+	# 与 _position_block 同一套「单元相对质心」规则，只是材质不同
+	if _ghost == null or _ghost_state == null:
+		return
+	# 先 remove_child 再 queue_free：queue_free 是**延迟**的，旧网格会在本帧内继续
+	# 作为 _ghost 的子节点存在，下一句 get_children() 就会把上一姿态的旧网格也搬进 rig
+	# （画面上表现为幽灵身上多出一撮残留方块）。
+	for c in _ghost.get_children():
+		_ghost.remove_child(c)
+		c.queue_free()
+	var cells: Array = _ghost_state.world_cells()
+	var cs: Vector3 = _cells_center(cells)
+	_ghost.position = cs
+	var mat: StandardMaterial3D = _ghost_material()
+	for cell in cells:
+		var m := _make_box(Vector3(1.0, 1.0, 1.0), mat)
+		m.position = Vector3(float(cell.x), float(cell.y) + 0.5, float(cell.z)) - cs
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_ghost.add_child(m)
+
+
+func ghost_mesh_count() -> int:
+	return _ghost.get_child_count() if _ghost != null else 0
+
+
+func ghost_center() -> Vector3:
+	# 幽灵**当前画在哪里**的质心（世界坐标）；无幽灵时返回 INF。
+	# 翻滚期间承载网格的是 rig（此时 _ghost 自己被隐藏），所以必须优先读 rig ——
+	# 只读 _ghost.position 会拿到「上一次落位」的陈旧坐标（第一版就是这么错的，
+	# 表现为帧间位移断崖式跳变，看起来像瞬移）。
+	if _ghost == null or _ghost_state == null:
+		return Vector3.INF
+	if _ghost_rig != null:
+		return _ghost_rig.position
+	return _ghost.position
+
+
+func ghost_cells() -> Array:
+	return _ghost_state.world_cells() if _ghost_state != null else []
+
+
+func ghost_at_goal() -> bool:
+	# 幽灵是否停在目标格上（验证「回放数据确实能解开这一关」）
+	if board == null or _ghost_state == null:
+		return false
+	return board.is_goal(_ghost_state.world_cells())
+
+
+func ghost_busy() -> bool:
+	return _ghost_busy
+
+
+func ghost_move_index() -> int:
+	# 幽灵已推进的步数。测试靠它把逐帧采样**按步分组**，从而断言「每一步都有中间帧」
+	# —— 这是「有没有真在演动画」的可靠判据（比按 dt 算速度稳，不受长帧影响）
+	return _ghost_moves
+
+
+func play_ghost(moves: Array) -> void:
+	# 把「上次的走法」按固定节奏连续滚一遍（记忆辅助，不是比赛）。
+	# 关键约束：**绝不允许碰到玩家的任何状态** —— 它只动自己的 _ghost_state。
+	if _ghost == null or moves.is_empty() or _ghost_state == null:
+		return
+	_ghost_epoch += 1
+	var epoch: int = _ghost_epoch
+	_ghost_busy = true
+	_reset_ghost()
+	if not animate:
+		# 测试/低开销模式：直接摆到终点，不播动画
+		for label in moves:
+			_ghost_advance(Moves.direction_from_label(str(label)))
+		_position_ghost()
+		_ghost_busy = false
+		return
+	for label in moves:
+		if epoch != _ghost_epoch or _ghost == null or _ghost_state == null:
+			_ghost_busy = false
+			return
+		var tw: Tween = _ghost_roll(Moves.direction_from_label(str(label)))
+		if tw != null:
+			await tw.finished
+	_ghost_busy = false
+
+
+func _ghost_advance(d: Vector3i) -> void:
+	# 幽灵的纯状态推进：不碰玩家状态、不碰棋盘、不碰计数
+	var r: Dictionary = Moves.roll_delta(_ghost_state.shape, _ghost_state.orientation, d)
+	_ghost_state = State.new(_ghost_state.shape, int(r["orientation"]), _ghost_state.position + r["delta"])
+	_ghost_moves += 1
+
+
+func _ghost_roll(d: Vector3i) -> Tween:
+	# 幽灵走一步：运动模型与玩家方块**共用** _roll_motion()
+	if _ghost == null or _ghost_state == null:
+		return null
+	var r: Dictionary = Moves.roll_delta(_ghost_state.shape, _ghost_state.orientation, d)
+	var from_cells: Array = _ghost_state.world_cells()
+	var from_center: Vector3 = _cells_center(from_cells)
+	var q_step: Quaternion = _rot_quat(d)
+	var pivot: Vector3 = Vector3(_ghost_state.position) + r["pivot"] + Vector3(0.0, 0.5, 0.0)
+	_ghost_state = State.new(_ghost_state.shape, int(r["orientation"]), _ghost_state.position + r["delta"])
+	_ghost_moves += 1
+	# 与玩家方块一样：把单元搬进一个「原点=质心」的 rig，播完再重建
+	var rig := Node3D.new()
+	rig.name = "GhostRig"
+	rig.position = from_center
+	add_child(rig)
+	_ghost_rig = rig
+	for c in _ghost.get_children():
+		_ghost.remove_child(c)
+		rig.add_child(c)
+	_ghost.visible = false
+	var tw: Tween = _roll_motion(rig, from_center, pivot, q_step, ROLL_TIME)
+	tw.finished.connect(func() -> void:
+		_ghost_rig = null
+		rig.queue_free()
+		if _ghost != null:
+			_ghost.visible = true
+			_position_ghost())
+	return tw
+
+
 func _block_meshes() -> Array:
 	# 承载方块形态的单元网格（挂在质心 pivot 下）
 	return _block_pivot.get_children() if _block_pivot != null else []
@@ -579,12 +784,15 @@ func block_mesh_centers() -> Array:
 
 
 func _rig_meshes() -> Array:
-	# 正在翻滚/坠落时，单元网格临时挂在 rig 下
-	var out: Array = []
-	for c in get_children():
-		if str(c.name).ends_with("Rig"):
-			out.append_array(c.get_children())
-	return out
+	# 正在翻滚/坠落时，玩家方块的单元网格临时挂在 rig 下。
+	#
+	# 这里**必须**用显式引用，不能用「名字以 Rig 结尾」去 get_children() 里找：
+	# 幽灵的节点叫 GhostRig，同样以 Rig 结尾 —— 于是「玩家方块画在哪里」会混进幽灵的
+	# 网格，读到的是两者的混合位置。这是真踩过的坑（幽灵动画测试的断言全乱）。
+	# 与 tile_count() 的注释同一条教训：Godot 的节点命名/改名不可依赖。
+	if not is_instance_valid(_player_rig):
+		return []
+	return _player_rig.get_children()
 
 
 func tile_count() -> int:

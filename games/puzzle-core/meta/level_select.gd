@@ -17,6 +17,7 @@ const Shapes = preload("res://core/shapes.gd")
 signal level_chosen(index: int)
 signal closed
 signal reset_requested
+signal ghost_toggled(on: bool)
 signal celebration_requested   # 「回顾通关」：全部通关后想再看一次庆祝动画
 
 const COLS := 5
@@ -46,6 +47,8 @@ var _insets: Dictionary = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
 var _margin: MarginContainer = null
 var _hint: Label
 var _reset_btn: Button
+var _ghost_btn: Button
+var _ghost_on: bool = false
 var _back_btn: Button
 var _celebrate_btn: Button
 var touch_mode: bool = false   # 由 main 设置：触屏下提示文案与按钮尺寸要适配
@@ -146,6 +149,16 @@ func _ready() -> void:
 	_celebrate_btn.pressed.connect(func() -> void: celebration_requested.emit())
 	row.add_child(_celebrate_btn)
 
+	_ghost_btn = Button.new()
+	_ghost_btn.text = "影子: 关"
+	_ghost_btn.flat = true
+	_ghost_btn.focus_mode = Control.FOCUS_NONE
+	_ghost_btn.add_theme_font_size_override("font_size", 14)
+	_ghost_btn.add_theme_color_override("font_color", FG_DIM)
+	_ghost_btn.add_theme_color_override("font_hover_color", Color(0.72, 0.90, 1.0))
+	_ghost_btn.pressed.connect(_on_ghost_pressed)
+	row.add_child(_ghost_btn)
+
 	_reset_btn = Button.new()
 	_reset_btn.text = "重置进度"
 	_reset_btn.flat = true
@@ -171,6 +184,8 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 	if _celebrate_btn != null:
 		_celebrate_btn.visible = entries.size() > 0 and p_progress != null \
 			and p_progress.completed_count() >= entries.size()
+	if p_progress != null:
+		set_ghost_state(p_progress.ghost_enabled())
 
 	for c in _cards:
 		_grid.remove_child(c)
@@ -391,6 +406,23 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.keycode == KEY_ESCAPE:
 			close()
 			get_viewport().set_input_as_handled()
+
+
+func ghost_button_text() -> String:
+	# 「上次的走法」= 把自己的最佳记录当影子滚一遍（记忆辅助，不是比赛）
+	return "影子: " + ("开" if _ghost_on else "关")
+
+
+func set_ghost_state(on: bool) -> void:
+	_ghost_on = on
+	if _ghost_btn != null:
+		_ghost_btn.text = ghost_button_text()
+
+
+func _on_ghost_pressed() -> void:
+	_ghost_on = not _ghost_on
+	set_ghost_state(_ghost_on)
+	ghost_toggled.emit(_ghost_on)
 
 
 func _on_reset_pressed() -> void:

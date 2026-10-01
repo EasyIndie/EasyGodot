@@ -317,6 +317,42 @@ func _update_clock_label(force: bool = false) -> void:
 	time_label.text = Leaderboard.format_clock(ms)
 
 
+func _apply_ghost_setting(on: bool) -> void:
+	# 一处改状态的**唯一**入口：游戏层结构 + 存档偏好 + 界面按钮显示，三者始终一致
+	progress.set_ghost_enabled(on)
+	game.set_ghost_enabled(on)
+	if level_select != null:
+		level_select.set_ghost_state(on)
+	if on:
+		_play_ghost_for_current()
+
+
+func _toggle_ghost() -> void:
+	_apply_ghost_setting(not progress.ghost_enabled())
+
+
+func _on_ghost_toggled(on: bool) -> void:
+	_apply_ghost_setting(on)
+
+
+func _play_ghost_for_current() -> void:
+	# 没有任何记录时什么都不做（新关卡没有“上次的走法”）
+	if game == null or not progress.ghost_enabled():
+		game.set_ghost_enabled(false)
+		return
+	var key: String = _level_key(current_index)
+	if key == "" or not progress.has_replay(key):
+		game.set_ghost_enabled(false)
+		return
+	game.set_ghost_enabled(true)
+	# 先等玩家方块的入场下落演完：两个方块同时翻滚，屏幕上是看不出谁是谁的
+	await _wait_for_anim()
+	# 等待期间可能已经换关了 —— 那就交给那一次调用（避免两次播放叠在一起）
+	if _level_key(current_index) != key:
+		return
+	game.play_ghost(progress.replay(key).get("moves", []))
+
+
 func _is_tv_like() -> bool:
 	# 「移动平台 + 没有触摸屏」= 电视 / 电视盒子（见 ui_layout.is_tv_like 的说明）
 	#
@@ -508,7 +544,7 @@ func _refresh_bands() -> void:
 		# 电视遥控器上没有 R / L / V，写了等于没写 —— 只提示真正可用的键
 		base = "遥控器方向键移动　·　确认重开或继续　·　返回选关　·　掉出棋盘或落入空洞会坠落"
 	else:
-		base = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     ·     掉出棋盘或落入空洞会坠落"
+		base = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     G 影子     ·     掉出棋盘或落入空洞会坠落"
 	help_label.text = base
 	# 同一条带只显示优先级最高的一条
 	help_label.visible = not (win_label.visible or fail_label.visible or replay_label.visible)
@@ -597,6 +633,8 @@ func _do_load(index: int) -> void:
 		# 触屏玩家看不到键盘提示，进关卡时给一次对角线滑动提示（每局只给一次）
 		if touch_controls != null and touch_controls.is_shown():
 			touch_controls.show_swipe_hint()
+		# 「影子」：开了就自动把自己的最佳走法滚一遍（换关、重开都会重播一次）
+		_play_ghost_for_current()
 
 
 ## 换关：棋盘下沉 + 暗幕淡入（“关卡合拢”）→ 暗幕下换关 → 新棋盘降入 + 淡出
@@ -682,6 +720,7 @@ func _setup_level_select() -> void:
 	level_select.closed.connect(_on_level_select_closed)
 	level_select.reset_requested.connect(_on_progress_reset)
 	level_select.celebration_requested.connect(_on_celebration_requested)
+	level_select.ghost_toggled.connect(_on_ghost_toggled)
 
 
 func _setup_ending() -> void:
@@ -1030,6 +1069,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				return
 			KEY_V:
 				_play_replay()
+				return
+			KEY_G:
+				# 「影子」开关（等价于选关界面里的按钮）
+				_toggle_ghost()
 				return
 			KEY_T:
 				# 桌面调试：手动开关触屏操作层
