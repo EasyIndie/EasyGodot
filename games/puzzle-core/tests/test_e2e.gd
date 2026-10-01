@@ -11,6 +11,7 @@ const Progress = preload("res://meta/progress.gd")
 const TouchControls = preload("res://meta/touch_controls.gd")
 const UiLayout = preload("res://meta/ui_layout.gd")
 const Leaderboard = preload("res://meta/leaderboard.gd")
+const Share = preload("res://meta/share.gd")
 
 var checks: int = 0
 var failures: int = 0
@@ -50,6 +51,7 @@ func _run() -> void:
 	await _test_tv_input()
 	await _test_clock()
 	await _test_ghost()
+	await _test_challenge()
 	ProjectSettings.set_setting("puzzle/progress_path", "")
 	_remove_tmp(SUITE_SAVE)
 	_report_and_quit()
@@ -607,6 +609,73 @@ func _test_mobile_back() -> void:
 	await create_timer(0.25).timeout
 	scene.free()
 	_remove_tmp(tmp)
+
+
+func _test_challenge() -> void:
+	# 好友挑战：从链接（Web 查询串 / 原生环境变量，同一套语法）直接进入某一关，
+	# 通关后**不自动换关**，并给出与对方成绩的对照。
+	var tmp := "user://test_e2e_challenge.json"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
+	ProjectSettings.set_setting("puzzle/progress_path", tmp)
+	OS.set_environment("GF_CHALLENGE", "level=7&moves=5")
+
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	await create_timer(0.1).timeout
+	scene.game.animate = false
+
+	# ① 直接打开第 7 关（而不是第 1 关）
+	check(scene.challenge_active(), "带挑战参数的启动应进入挑战模式")
+	check(scene.current_index == 6, "应直接载入第 7 关（实际下标 %d）" % scene.current_index)
+	check(int(scene._challenge["moves"]) == 5, "应记住对方的目标步数")
+	check(scene.challenge_label.visible, "应显示挑战目标行")
+	check(scene.challenge_label.text.contains("第 7 关") and scene.challenge_label.text.contains("5 步"),
+		"挑战行要写清关号与目标（实际：%s）" % scene.challenge_label.text)
+
+	# ② 分享：链接能被自己解析回来，并且真的进了剪贴板
+	var text: String = scene._share_current(6)
+	check(text.contains("level=7"), "分享文本应带关号链接（实际：%s）" % text)
+	var parsed: Dictionary = Share.parse_challenge(text, scene.levels.size())
+	check(int(parsed.get("level", 0)) == 7, "分享出去的链接必须能被解析回第 7 关")
+	scene._on_share_requested(6)
+	# 剪贴板本身要平台支持（headless 下没有），所以断言我们**交给平台的内容**
+	# ——这也是这个接缝存在的理由：能测的是「我们递出去了什么」
+	check(scene.last_share_text.contains("level=7"),
+		"点击分享应把带链接的文案交给平台（实际：%s）" % scene.last_share_text.left(40))
+	check(scene.level_select.share_button_text() == "已复制链接", "复制后按钮要给出反馈")
+
+	# ③ 通关：不自动换关 + 给出对照
+	var sol: Dictionary = Solver.new(scene.game.board, scene.game.state).solve()
+	check(bool(sol["solvable"]), "第 7 关应有解")
+	scene._run_moves.clear()
+	for d in sol["solution"]:
+		scene._run_moves.append(str(d))
+	scene.game.move_count = sol["solution"].size()
+	scene.game.won_flag = true
+	scene._on_won()
+	await create_timer(0.6).timeout
+	check(scene.current_index == 6, "挑战模式通关后不应自动换关（实际下标 %d）" % scene.current_index)
+	check(scene.win_label.text.contains("挑战完成"), "挑战完成文案（实际：%s）" % scene.win_label.text)
+	check(scene.win_label.text.contains("步"), "挑战完成文案要报出步数")
+	check(scene.progress.best_moves("level_07") > 0 or scene.progress.has_ever_cleared("level_07"),
+		"挑战通关也是一次通关，应被记录")
+
+	scene.free()
+	OS.set_environment("GF_CHALLENGE", "")
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
+
+	# ④ 坏链接不能把游戏带进半开状态：安静地按普通启动处理
+	OS.set_environment("GF_CHALLENGE", "level=999&moves=abc")
+	var s2 = load("res://scenes/main.tscn").instantiate()
+	root.add_child(s2)
+	await process_frame
+	await create_timer(0.05).timeout
+	check(not s2.challenge_active(), "坏链接不应进入挑战模式")
+	check(s2.current_index == 0, "坏链接应从第 1 关正常开始")
+	s2.free()
+	OS.set_environment("GF_CHALLENGE", "")
 
 
 func _test_ghost() -> void:

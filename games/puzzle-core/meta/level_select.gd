@@ -18,6 +18,7 @@ signal level_chosen(index: int)
 signal closed
 signal reset_requested
 signal ghost_toggled(on: bool)
+signal share_requested(index: int)
 signal celebration_requested   # 「回顾通关」：全部通关后想再看一次庆祝动画
 
 const COLS := 5
@@ -48,6 +49,7 @@ var _margin: MarginContainer = null
 var _hint: Label
 var _reset_btn: Button
 var _ghost_btn: Button
+var _share_btn: Button
 var _ghost_on: bool = false
 var _back_btn: Button
 var _celebrate_btn: Button
@@ -148,6 +150,16 @@ func _ready() -> void:
 	_celebrate_btn.add_theme_stylebox_override("hover", _sb(CARD_BG_HOVER, EDGE_HI, 1))
 	_celebrate_btn.pressed.connect(func() -> void: celebration_requested.emit())
 	row.add_child(_celebrate_btn)
+
+	_share_btn = Button.new()
+	_share_btn.text = "分享本关"
+	_share_btn.flat = true
+	_share_btn.focus_mode = Control.FOCUS_NONE
+	_share_btn.add_theme_font_size_override("font_size", 14)
+	_share_btn.add_theme_color_override("font_color", FG_DIM)
+	_share_btn.add_theme_color_override("font_hover_color", Color(0.72, 1.0, 0.86))
+	_share_btn.pressed.connect(func() -> void: share_requested.emit(_current))
+	row.add_child(_share_btn)
 
 	_ghost_btn = Button.new()
 	_ghost_btn.text = "影子: 关"
@@ -406,6 +418,20 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.keycode == KEY_ESCAPE:
 			close()
 			get_viewport().set_input_as_handled()
+
+
+func share_button_text() -> String:
+	return _share_btn.text if _share_btn != null else ""
+
+
+func set_share_button_text(t: String) -> void:
+	# 复制成功后按钮自己说一声（否则玩家不知道点没点成功）
+	if _share_btn != null:
+		_share_btn.text = t
+
+
+func share_button() -> Button:
+	return _share_btn
 
 
 func ghost_button_text() -> String:

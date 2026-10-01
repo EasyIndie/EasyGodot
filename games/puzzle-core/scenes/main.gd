@@ -11,6 +11,7 @@ const RenderQuality = preload("res://meta/render_quality.gd")
 const Ending = preload("res://meta/ending.gd")
 const Leaderboard = preload("res://meta/leaderboard.gd")
 const Stopwatch = preload("res://meta/stopwatch.gd")
+const Share = preload("res://meta/share.gd")
 
 var game: Node3D = null
 var cam: Camera3D = null
@@ -22,6 +23,9 @@ var progress = null             # 玩家进度（已完成 / 最佳步数 / 最�
 var clock = null                # 秒表：最快时间记录（起停规则见 _clock_should_run）
 var _app_paused: bool = false   # 切后台 / 失焦：计时与画质采样都要停
 var _clock_shown: int = -1      # HUD 上已经画出的计时（只在真正变化时改文本）
+var _challenge: Dictionary = {} # 好友挑战（{"level": n, "moves": m}）；空 = 普通启动
+var challenge_label: Label
+var last_share_text: String = ""   # 最近一次交给平台（剪贴板）的分享内容（测试接缝）
 var level_select = null         # 选关界面
 var _run_moves: Array = []      # 本局已走的方向标签序列（用于 Replay）
 const REPLAY_BEAT := 0.34   # 回放每步之间的停顿（让回放看起来像“一个人在玩”）
@@ -102,7 +106,9 @@ func _ready() -> void:
 	game.won.connect(_on_won)
 	game.fell.connect(_on_fell)
 	clock = Stopwatch.new()
-	_load_level(0, false)
+	_setup_challenge()
+	# 挑战模式直接载入指定关卡（收到链接的人不该被迫先通关前面 11 关）
+	_load_level(int(_challenge.get("level", 1)) - 1 if challenge_active() else 0, false)
 	_apply_tv_ui_scale()
 	# 移动端的「返回」：根窗口发 go_back_requested（Android 返回键 / iOS 边缘返回手势）。
 	# 必须在 project.godot 里把 application/config/quit_on_go_back 设为 false，
@@ -351,6 +357,64 @@ func _play_ghost_for_current() -> void:
 	if _level_key(current_index) != key:
 		return
 	game.play_ghost(progress.replay(key).get("moves", []))
+
+
+func challenge_source() -> String:
+	# 挑战参数从哪来：Web 用地址栏查询串；原生包没有 URL，用环境变量
+	# （GF_CHALLENGE="level=12&moves=9"）—— 与查询串**同一套语法**，共用同一个解析器，
+	# 排障与截图测试也因此能在桌面上复现挑战模式。
+	if _query_string != "":
+		return _query_string
+	return OS.get_environment("GF_CHALLENGE")
+
+
+func challenge_active() -> bool:
+	return not _challenge.is_empty()
+
+
+func _setup_challenge() -> void:
+	var raw: String = challenge_source()
+	if raw == "":
+		return
+	var c: Dictionary = Share.parse_challenge(raw, levels.size())
+	if c.is_empty():
+		# 链接坏掉/被改坏时安静地按普通启动处理（绝不弹错、绝不进入半开状态）
+		return
+	_challenge = c
+
+
+func _share_current(index: int) -> String:
+	# 关号对外从 1 开始；base 用当前 Web 地址（原生包内没有地址 → share.gd 落回公网版）
+	var base: String = ""
+	if OS.has_feature("web"):
+		base = str(JavaScriptBridge.eval("window.location.href.split('?')[0]", true))
+	var key: String = _level_key(index)
+	var moves: int = progress.best_moves(key)
+	var time_ms: int = progress.best_time(key)
+	var url: String = Share.challenge_url(base, index + 1, moves)
+	return Share.share_text(index + 1, moves, time_ms, url)
+
+
+func _on_share_requested(index: int) -> void:
+	var text: String = _share_current(index)
+	last_share_text = text
+	DisplayServer.clipboard_set(text)
+	if level_select != null:
+		level_select.set_share_button_text("已复制链接")
+		# 两秒后恢复按钮文案（否则「已复制」会一直挂着，看起来像坏了）
+		var tw := create_tween()
+		tw.tween_interval(2.0)
+		tw.tween_callback(func() -> void:
+			if level_select != null:
+				level_select.set_share_button_text("分享本关"))
+
+
+func _finish_challenge(res: Dictionary) -> void:
+	# 挑战模式通关：**不自动换关**（挑战是独立体验，玩家可能只是想试试这一关），
+	# 只报出对照结果 + 明确的下一步
+	var target: int = int(_challenge.get("moves", -1))
+	win_label.text = Share.result_line(int(res["move_count"]), int(res.get("time_ms", -1)), target) \
+		+ "　·　R 重玩 / L 选关"
 
 
 func _is_tv_like() -> bool:
@@ -721,6 +785,7 @@ func _setup_level_select() -> void:
 	level_select.reset_requested.connect(_on_progress_reset)
 	level_select.celebration_requested.connect(_on_celebration_requested)
 	level_select.ghost_toggled.connect(_on_ghost_toggled)
+	level_select.share_requested.connect(_on_share_requested)
 
 
 func _setup_ending() -> void:
@@ -921,11 +986,19 @@ func _on_won() -> void:
 	var res: Dictionary = progress.record_win(_level_key(current_index), _run_moves, clock.elapsed_ms())
 	_update_hud()
 	win_label.text = _win_text(res)
+	if challenge_active():
+		# 挑战模式：立刻给出与对方的对照（不要等灯光脉冲演完才显示，那是普通模式的节奏），
+		# 并且**不自动换关** —— 收到链接的人可能只想试这一关
+		_finish_challenge(res)
 	win_label.visible = true
 	_refresh_bands()
 	# 通关反馈：灯光脉冲一下（方块保持原位、不变色），随后自然滚动换关
 	await _win_beat()
 	if transitioning or levels.is_empty():
+		return
+	if challenge_active():
+		# 挑战模式：到此为止（文案已在上面当场给过）
+		_refresh_bands()
 		return
 	# 刚刚补完最后一关：给一个明确的“旅程结束”，而不是默默滚回第 1 关（那看起来像 bug）。
 	# 已经全部通关过的玩家再通关，就按普通换关处理（想再看一次可以去选关界面点「回顾通关」）。
@@ -995,6 +1068,10 @@ func _update_hud() -> void:
 	# 进度条表示**整体通关进度**，而不是“当前第几关”：
 	# 跳到第 18 关时看到 18/20 会让人误以为快通关了，实际上只通了 3 关。
 	progress_bar.value = float(done)
+	if challenge_label != null:
+		challenge_label.visible = challenge_active()
+		if challenge_active():
+			challenge_label.text = Share.challenge_line(int(_challenge["level"]), int(_challenge.get("moves", -1)))
 	moves_label.text = "步数  %d" % game.move_count
 	_update_clock_label(true)
 
@@ -1230,13 +1307,19 @@ func _setup_hud() -> void:
 	left.offset_left = 22.0
 	left.offset_top = 20.0
 	left.offset_right = 22.0 + LEFT_PANEL_W
-	left.offset_bottom = 20.0 + 78.0
+	left.offset_bottom = 20.0 + 100.0
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 9)
 	level_label = Label.new()
 	level_label.add_theme_font_size_override("font_size", 21)
 	level_label.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0))
 	col.add_child(level_label)
+	# 好友挑战的目标（只在挑战模式出现；它不是「持续状态」，是启动参数带来的上下文）
+	challenge_label = Label.new()
+	challenge_label.add_theme_font_size_override("font_size", 14)
+	challenge_label.add_theme_color_override("font_color", Color(0.55, 1.0, 0.78))
+	challenge_label.visible = false
+	col.add_child(challenge_label)
 	progress_bar = ProgressBar.new()
 	progress_bar.custom_minimum_size = Vector2(0, 8)
 	progress_bar.show_percentage = false
