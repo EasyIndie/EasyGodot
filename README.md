@@ -91,6 +91,7 @@ workflow/scripts/gf-pages.sh
 | [09 移动端发布](workflow/docs/09-mobile-distribution.md) | Android / iOS 出包与上架清单、返回键与切后台约定、内容量与变现选择 |
 | [06 新游戏手册](workflow/docs/06-new-game-playbook.md) | 用同一套平台做下一款游戏 |
 | [07 MVP 状态](workflow/docs/07-mvp-status.md) | MVP 对照表、待办、坑与交接说明 |
+| [10 关卡机制升级](workflow/docs/10-level-mechanics.md) | 多块棋盘 + 机关（开关/桥/闸门/传送门/碎裂砖）、求解器如何自动适配、"机关是否承重"自动判据 |
 
 ## CI / 发布
 

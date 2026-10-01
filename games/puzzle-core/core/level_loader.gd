@@ -5,6 +5,7 @@
 #     "grid": {"x": 8, "z": 8},
 #     "holes": [[x,z], ...],
 #     "goal":  [[x,z], ...],
+#     "mechanisms": [{"id":"sw1","kind":"switch","tiles":[[x,z]],"target":"br1"}, ...]  ← 可选
 #     "start": {"shape": "domino", "orientation": "standing"|int, "position": [x,y,z]},
 #     "optimal_moves": 7, "difficulty": "medium"   ← 由 build_level_set 写入的缓存元数据
 #   }
@@ -13,6 +14,7 @@ extends RefCounted
 const Board = preload("res://core/board.gd")
 const State = preload("res://core/puzzle_state.gd")
 const Shapes = preload("res://core/shapes.gd")
+const Mechanisms = preload("res://core/mechanisms.gd")
 
 
 static func load_file(path: String) -> Dictionary:
@@ -49,6 +51,9 @@ static func load_dict(data: Dictionary) -> Dictionary:
 		goal.append(Vector2i(int(g[0]), int(g[1])))
 
 	var grid: Dictionary = data.get("grid", {"x": 8, "z": 8})
-	var board = Board.new(str(data.get("id", "")), int(grid.get("x", 8)), int(grid.get("z", 8)), holes, goal)
+	# 机关是**可选**字段：老关卡一个字节都不用改（20 关的曲线与存档键因此不受影响）
+	var mechs: Array = Mechanisms.parse(data.get("mechanisms", []))
+	var board = Board.new(str(data.get("id", "")), int(grid.get("x", 8)), int(grid.get("z", 8)),
+		holes, goal, mechs)
 
 	return {"board": board, "start": State.new(shape, orientation, position)}

@@ -11,6 +11,8 @@ extends Node3D
 const Loader = preload("res://core/level_loader.gd")
 const Core = preload("res://core/puzzle_core.gd")
 const State = preload("res://core/puzzle_state.gd")
+const Mech = preload("res://core/mechanisms.gd")
+const MechState = preload("res://core/mech_state.gd")
 const Moves = preload("res://core/moves.gd")
 
 signal won
@@ -32,6 +34,13 @@ const COLOR_TILE_B := Color(0.31, 0.39, 0.58)   # 棋盘格（深）
 const COLOR_GOAL := Color(0.16, 0.80, 0.52)     # 目标格（会呼吸发光）
 const COLOR_BLOCK := Color(1.00, 0.60, 0.22)    # 方块（暖橙）
 const COLOR_GOAL_RING := Color(0.35, 1.00, 0.70) # 目标“光圈”（嵌在瓦片表面）
+# ── 机关配色（机关必须一眼可见，否则等于没做）──────────
+const COLOR_SWITCH := Color(1.00, 0.78, 0.30)      # 开关（琥珀）
+const COLOR_SWITCH_ON := Color(1.00, 0.95, 0.55)   # 开关被压住（更亮）
+const COLOR_BRIDGE_ON := Color(0.30, 0.85, 0.92)   # 桥（开）
+const COLOR_FRAGILE := Color(0.72, 0.72, 0.78)     # 碎裂砖
+const COLOR_PORTAL_A := Color(0.72, 0.45, 1.00)    # 传送门 A（紫）
+const COLOR_PORTAL_B := Color(0.35, 0.95, 0.85)    # 传送门 B（青）
 
 # 落地回弹的挤压幅度：很小的数值就有明显的“重量感”，是性价比最高的一档手感反馈
 const LAND_SQUASH := 0.16
@@ -52,6 +61,13 @@ var goal_rings: Array = []   # 目标光圈（随棋盘一起升降/旋转）
 var _tile_mat_a: ShaderMaterial = null
 var _tile_mat_b: ShaderMaterial = null
 var _tile_mat_goal: ShaderMaterial = null
+var _tile_mat_switch: ShaderMaterial = null
+var _tile_mat_bridge_on: ShaderMaterial = null
+var _tile_mat_bridge_off: ShaderMaterial = null
+var _tile_mat_fragile: ShaderMaterial = null
+var _tile_mat_portal_a: ShaderMaterial = null
+var _tile_mat_portal_b: ShaderMaterial = null
+var _tile_mat_bridge_ghost: ShaderMaterial = null
 var _block_mat: ShaderMaterial = null
 var _glow_t: float = 0.0
 var _win_flash: float = 0.0
@@ -61,6 +77,9 @@ var lost_flag: bool = false
 var animating: bool = false
 var animate: bool = true     # false = 同步（测试用）
 var _stick_prev: Dictionary = {}   # 左摇杆各轴的上一次取值（边沿触发用）
+var mech = null                    # 机关状态（MechState；无机关关卡为 null）
+var _mech_tiles: Dictionary = {}   # {"x,z": [MeshInstance3D, ...]} 机关格上的瓦片（用于刷新外观）
+var _bridge_ghosts: Dictionary = {} # {"x,z": MeshInstance3D} 桥关闭时的"幽灵框"
 var low_effects: bool = false  # 低端 GPU / 排障：停掉逐帧材质更新
 # ── 幽灵影子（「上次的走法」）──────────────────────────
 # 它**不是**比赛用的对手：解谜游戏的成绩是**步数**，不是时间，而回放里没有记录
@@ -98,6 +117,7 @@ func load_dict(lv: Dictionary) -> bool:
 		"position": state.position,
 	}
 	level_id = board.id
+	mech = MechState.new()   # 机关状态；无机关关卡就是一个空状态（判定路径完全一致）
 	core = Core.new(board, state)
 	won_flag = false
 	lost_flag = false
@@ -109,6 +129,7 @@ func load_dict(lv: Dictionary) -> bool:
 	_build_board()
 	_build_block()
 	_position_block()
+	refresh_mechanisms()
 	return true
 
 
@@ -116,16 +137,31 @@ func _plan_move(d: Vector3i) -> Dictionary:
 	# 单步移动的完整几何信息（纯计算，不改状态）。
 	# roll_delta 的 pivot 用「单元中心在整数格」的坐标；渲染把方块抬高 0.5 贴地，
 	# 所以此处要 +0.5，支点才是方块真正的底棱。
+	# 用机关层的步进结果作为唯一真相（含桥/闸门/传送/碎裂）：
+	# 渲染层**不允许**自己再算一遍"能不能站" —— 两处判定迟早会不一致。
+	var step = Core.apply_step(board, state, mech, d)
 	var r: Dictionary = Moves.roll_delta(state.shape, state.orientation, d)
-	var next_pos: Vector3i = state.position + r["delta"]
-	var to_cells: Array = state.cells_at(r["orientation"], next_pos)
+	if step == null:
+		# 走不过去：仍然给一个"落点"用于播坠落动画（与旧行为一致）
+		var bad_pos: Vector3i = state.position + r["delta"]
+		return {
+			"orientation": r["orientation"],
+			"position": bad_pos,
+			"pivot": Vector3(state.position) + r["pivot"] + Vector3(0.0, 0.5, 0.0),
+			"from_cells": state.world_cells(),
+			"to_cells": state.cells_at(r["orientation"], bad_pos),
+			"supported": false,
+			"blocked": true,
+		}
 	return {
 		"orientation": r["orientation"],
-		"position": next_pos,
+		"position": step["state"].position,
 		"pivot": Vector3(state.position) + r["pivot"] + Vector3(0.0, 0.5, 0.0),
 		"from_cells": state.world_cells(),
-		"to_cells": to_cells,
-		"supported": board.supports(to_cells),
+		"to_cells": step["state"].world_cells(),
+		"supported": not bool(step["fall"]),
+		"step": step,
+		"blocked": false,
 	}
 
 
@@ -133,11 +169,15 @@ func try_move(d: Vector3i) -> bool:
 	if won_flag or lost_flag or animating:
 		return false
 	var st: Dictionary = _plan_move(d)
-	# 落点是否全部实心；否则坠落（棋盘边缘与空洞都是「失去支撑」，效果一致）
+	# 落点是否全部实心；否则坠落（棋盘边缘、空洞、以及机关造成的缺口，效果一致）
 	var supported: bool = bool(st["supported"])
 	if supported:
-		state = State.new(state.shape, int(st["orientation"]), st["position"])
+		var step: Dictionary = st["step"]
+		state = step["state"]
+		# 机关状态必须跟着方块一起前进（桥开合/碎裂都在这里面）
+		mech = step["mech"]
 		move_count += 1
+		refresh_mechanisms()
 	if animate:
 		_start_roll(d, st)
 	else:
@@ -265,7 +305,7 @@ func check_fall() -> bool:
 	if won_flag or lost_flag or animating:
 		return false
 	var cells: Array = state.world_cells()
-	if board.supports(cells):
+	if Mech.supports(board, board.mechanisms, mech, cells):
 		return false
 	if not animate:
 		lost_flag = true
@@ -389,6 +429,11 @@ func _finish_move(supported: bool) -> void:
 		fell.emit()
 		return
 	_position_block()
+	# 落上去之后地面可能已被机关撤掉（例如自己把脚下的桥关掉）→ 这一帧还不掉，
+	# 等落地动画演完再踩空，玩家才看得懂"是我刚才那一下把自己害了"。
+	if not Mech.supports(board, board.mechanisms, mech, state.world_cells()):
+		check_fall()
+		return
 	# 刻意**不在每次移动后做挤压**：方块是刚体几何，每一步都“果冻”一下
 	# 读起来像渲染故障而不是重量感（真实反馈：方块移动动画很奇怪）。
 	# 挤压只留给「坠落重生落地」那一次 —— 那时它是“冲击”，语义成立。
@@ -414,27 +459,132 @@ func _build_board() -> void:
 	_tile_mat_a = _make_tile_material(COLOR_TILE_A)
 	_tile_mat_b = _make_tile_material(COLOR_TILE_B)
 	_tile_mat_goal = _make_tile_material(COLOR_GOAL, 0.55)
+	_tile_mat_switch = _make_tile_material(COLOR_SWITCH, 0.12)
+	_tile_mat_bridge_on = _make_tile_material(COLOR_BRIDGE_ON, 0.10)
+	_tile_mat_bridge_off = _make_tile_material(Color(COLOR_BRIDGE_ON.r, COLOR_BRIDGE_ON.g, COLOR_BRIDGE_ON.b, 0.35), 0.0)
+	_tile_mat_fragile = _make_tile_material(COLOR_FRAGILE)
+	_tile_mat_portal_a = _make_tile_material(COLOR_PORTAL_A, 0.35)
+	_tile_mat_portal_b = _make_tile_material(COLOR_PORTAL_B, 0.35)
+	_tile_mat_bridge_ghost = _make_tile_material(Color(COLOR_BRIDGE_ON.r, COLOR_BRIDGE_ON.g, COLOR_BRIDGE_ON.b, 0.22), 0.0)
 	board_root = Node3D.new()
 	board_root.name = "Board"
 	add_child(board_root)
+	var roles: Dictionary = Mech.roles_of(board.mechanisms)
 	for x in range(board.grid_x):
 		for z in range(board.grid_z):
 			var v2 := Vector2i(x, z)
-			if board.is_void(Vector3i(x, 0, z)):
-				# 空洞 = 地面缺失：直接不画地面（透出背景），就是一块“空的洞”
+			var role: String = str(roles.get("%d,%d" % [x, z], ""))
+			if role == "bridge":
+				# 桥：关闭时画一个"幽灵框"——**必须让玩家知道这里将来会有路**，
+				# 完全隐藏会让人以为那只是个普通空洞
+				var ghost := _make_box(Vector3(0.94, 0.02, 0.94), _tile_mat_bridge_ghost)
+				ghost.position = Vector3(float(x), -0.19, float(z))
+				ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				board_root.add_child(ghost)
+				_bridge_ghosts["%d,%d" % [x, z]] = ghost
+			if board.is_void(Vector3i(x, 0, z)) and role != "bridge" and role != "fragile":
+				# 空洞 = 地面缺失：直接不画地面（透出背景），就是一块“空的洞”。
+				# 例外：桥/碎裂砖是"补地类"机关，它们本身就架在空洞上（见 mechanisms.gd 的说明）。
 				continue
 			var is_goal: bool = board.goal.has(v2)
 			var mat: ShaderMaterial = _tile_mat_goal if is_goal else (
 				_tile_mat_a if (x + z) % 2 == 0 else _tile_mat_b)
+			match role:
+				"switch":
+					mat = _tile_mat_switch
+				"bridge":
+					mat = _tile_mat_bridge_on if _is_bridge_open(x, z) else _tile_mat_bridge_off
+				"fragile":
+					mat = _tile_mat_fragile
+				"portal":
+					mat = _tile_mat_portal_a if _portal_group(x, z) == 0 else _tile_mat_portal_b
 			var m := _make_box(Vector3(0.94, 0.2, 0.94), mat)
 			m.position = Vector3(float(x), -0.1, float(z))
 			# 瓦片不投影，但接收方块的影子 → 立体感
 			m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			board_root.add_child(m)
-			tiles.append(m)
+			# tiles 只记**静态地形**的瓦片：机关"补出来的地面"（架在空洞上的桥/碎裂砖）
+			# 单独放在 _mech_tiles 里 —— 否则 tile_count() 会把它们算进地形，
+			# "渲染出来的地面 == 关卡定义的地面" 这条断言就不再成立了。
+			if not board.is_void(Vector3i(x, 0, z)):
+				tiles.append(m)
+			if role != "":
+				var key := "%d,%d" % [x, z]
+				if not _mech_tiles.has(key):
+					_mech_tiles[key] = []
+				_mech_tiles[key].append(m)
 			if is_goal:
 				goal_tiles.append(m)
 				board_root.add_child(_make_goal_ring(Vector3(float(x), 0.0, float(z))))
+
+
+func _is_bridge_open(x: int, z: int) -> bool:
+	# 桥的开合状态（渲染用）
+	for d in board.mechanisms:
+		if str(d["kind"]) != "bridge":
+			continue
+		for t in d["tiles"]:
+			if t.x == x and t.y == z:
+				return mech != null and mech.flag(str(d["id"]))
+	return false
+
+
+func _is_switch_on(id: String) -> bool:
+	return mech != null and mech.flag(id)
+
+
+func _portal_group(x: int, z: int) -> int:
+	# 同一对传送门用同一个序号 → 同色（配对关系必须能一眼看出来）
+	var n: int = 0
+	for d in board.mechanisms:
+		if str(d["kind"]) != "portal":
+			continue
+		for t in d["links"]:
+			if t.x == x and t.y == z:
+				return n
+		n += 1
+	return 0
+
+
+func refresh_mechanisms() -> void:
+	# 机关外观 = mech 状态的**函数**（不是"播放一次动画就完事"）。
+	# 理由与庆祝动画那次踩的坑完全一样：持久状态与一次性动画混在一起一定会错。
+	# 换关、开关变化、碎裂之后都调用它。
+	if board == null or mech == null:
+		return
+	for key in _mech_tiles.keys():
+		var parts: Array = str(key).split(",")
+		var x: int = int(parts[0])
+		var z: int = int(parts[1])
+		var role: String = str(Mech.roles_of(board.mechanisms).get(key, ""))
+		for mi in _mech_tiles[key]:
+			var m := mi as MeshInstance3D
+			match role:
+				"switch":
+					var on: bool = false
+					for d in board.mechanisms:
+						if str(d["kind"]) != "switch":
+							continue
+						for t in d["tiles"]:
+							if t.x == x and t.y == z:
+								on = _is_switch_on(str(d["target"]))
+					m.material_override = _tile_mat_switch
+					m.position.y = -0.16 if on else -0.10
+				"bridge":
+					var open: bool = _is_bridge_open(x, z)
+					m.visible = open
+					m.material_override = _tile_mat_bridge_on if open else _tile_mat_bridge_off
+				"fragile":
+					var broken: bool = mech.is_broken(Vector3i(x, 0, z))
+					m.visible = not broken
+				"portal":
+					m.material_override = _tile_mat_portal_a if _portal_group(x, z) == 0 else _tile_mat_portal_b
+	# 桥的幽灵框：桥开着时收起（真瓦片已经在那个位置）
+	for key in _bridge_ghosts.keys():
+		var parts: Array = str(key).split(",")
+		var g := _bridge_ghosts[key] as MeshInstance3D
+		if g != null:
+			g.visible = not _is_bridge_open(int(parts[0]), int(parts[1]))
 
 
 func _make_tile_material(base: Color, glow: float = 0.0) -> ShaderMaterial:
@@ -793,6 +943,18 @@ func _rig_meshes() -> Array:
 	if not is_instance_valid(_player_rig):
 		return []
 	return _player_rig.get_children()
+
+
+func mech_tile_count() -> int:
+	# 机关格上的瓦片总数（供测试断言"机关确实被画出来了"）
+	var n: int = 0
+	for k in _mech_tiles.keys():
+		n += (_mech_tiles[k] as Array).size()
+	return n
+
+
+func bridge_ghost_count() -> int:
+	return _bridge_ghosts.size()
 
 
 func tile_count() -> int:

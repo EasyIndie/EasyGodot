@@ -13,14 +13,16 @@ var grid_x: int = 8
 var grid_z: int = 8
 var holes: Array = []   # Array[Vector2i] (x,z)，空洞（无地面）
 var goal: Array = []    # Array[Vector2i] (x,z)
+var mechanisms: Array = []   # 机关定义（见 core/mechanisms.gd）；空 = 纯空洞关卡
 
 
-func _init(p_id: String = "", p_grid_x: int = 8, p_grid_z: int = 8, p_holes: Array = [], p_goal: Array = []) -> void:
+func _init(p_id: String = "", p_grid_x: int = 8, p_grid_z: int = 8, p_holes: Array = [], p_goal: Array = [], p_mechanisms: Array = []) -> void:
 	id = p_id
 	grid_x = p_grid_x
 	grid_z = p_grid_z
 	holes = p_holes.duplicate()
 	goal = p_goal.duplicate()
+	mechanisms = p_mechanisms.duplicate()
 
 
 func is_inside(cell: Vector3i) -> bool:
@@ -38,8 +40,15 @@ func is_hole(cell: Vector3i) -> bool:
 
 
 func is_solid(cell: Vector3i) -> bool:
-	# 有地面 = 在棋盘内 且 不是空洞。“是否踩空”的唯一判定。
+	# **静态地形**的判定：在棋盘内 且 不是空洞。
+	# 带机关的关卡请走 Mechanisms.supports()（它在此基础上再算桥/闸门/碎裂）——
+	# 两处判定必须只有一份真相，所以这里不掺机关逻辑：
+	# board 只回答「这块地在关卡定义里是不是空的」，动态部分由 MechState 决定。
 	return is_inside(cell) and not is_void(cell)
+
+
+func has_mechanisms() -> bool:
+	return not mechanisms.is_empty()
 
 
 func set_void(v2: Vector2i, on: bool = true) -> void:
