@@ -10,6 +10,7 @@ const Fixtures = preload("res://tests/fixtures.gd")
 const Progress = preload("res://meta/progress.gd")
 const TouchControls = preload("res://meta/touch_controls.gd")
 const UiLayout = preload("res://meta/ui_layout.gd")
+const Leaderboard = preload("res://meta/leaderboard.gd")
 
 var checks: int = 0
 var failures: int = 0
@@ -47,6 +48,7 @@ func _run() -> void:
 	await _test_ending()
 	await _test_mobile_back()
 	await _test_tv_input()
+	await _test_clock()
 	ProjectSettings.set_setting("puzzle/progress_path", "")
 	_remove_tmp(SUITE_SAVE)
 	_report_and_quit()
@@ -513,21 +515,32 @@ func _test_replay_animation() -> void:
 
 	# ④ 回放中不允许瞬移：位移速度不能超过翻滚动画本身能达到的上限
 	#    （t*t 缓动末速 ~2/T，绕半径 ~1.12 的支点 → 约 14 格/秒；瞬移会远远超过）
+	# 采样时刻是**毫秒量化**的（Time.get_ticks_msec），所以两帧的实测 dt 可能比真实
+	# 帧时长小一点；headless 下帧率不受限、连续几帧落在同一毫秒里是常态。
+	# 因此 dt 取「实测值」与「一个 60fps 帧」的较大者作为下限 —— 这只把噪声挡掉：
+	# 真实故障（把整段翻滚错位一格以上，实测能有 8 格/帧）依然会被判失败。
 	var prev = null
-	var fast_frames: Array = []
+	var fast_frames: int = 0
+	var worst_ratio: float = 0.0
+	var worst_dist: float = 0.0
 	for s in samples:
 		var p: Vector3 = s["p"]
 		if p == Vector3.INF:
 			prev = null
 			continue
 		if prev != null and int(s["moves"]) >= 1:
-			var dt: float = maxf(float(int(s["t"]) - int(prev["t"])), 0.001) / 1000.0
+			var dt: float = maxf(float(int(s["t"]) - int(prev["t"])), 1000.0 / 60.0) / 1000.0
 			var dist: float = p.distance_to(prev["p"])
 			if dist > 14.0 * dt + 0.10:
-				fast_frames.append(dist)
+				fast_frames += 1
+			var ratio: float = dist / dt
+			if ratio > worst_ratio:
+				worst_ratio = ratio
+				worst_dist = dist
 		prev = s
-	check(fast_frames.is_empty(),
-		"回放中不应出现瞬移帧（有 %d 帧位移超过翻滚动画的速度上限）" % fast_frames.size())
+	check(fast_frames == 0,
+		"回放中不应出现瞬移帧（%d 帧超速，最差 %.2f 格/帧 ≈ %.1f 格/秒）"
+			% [fast_frames, worst_dist, worst_ratio])
 
 	# ⑤ 收尾复位后应回到起点、步数归零（与手动重开一致）
 	var guard: int = 0
@@ -593,6 +606,99 @@ func _test_mobile_back() -> void:
 	await create_timer(0.25).timeout
 	scene.free()
 	_remove_tmp(tmp)
+
+
+func _test_clock() -> void:
+	# 「最快时间」必须只统计**玩家真正在解题**的时间。这里逐条验证起停规则：
+	# 手动测试根本发现不了「看选关界面时表还在走」这类问题，但玩家的记录会被污染。
+	var tmp := "user://test_e2e_clock.json"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
+	ProjectSettings.set_setting("puzzle/progress_path", tmp)
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	await create_timer(0.1).timeout
+	scene.game.animate = false
+
+	# ① 正常对局：表在走，且 HUD 上真的在显示
+	check(scene.clock != null and scene.clock.is_running(), "载入完成后计时应在走")
+	var t0: int = scene.clock.elapsed_ms()
+	await create_timer(0.25).timeout
+	check(scene.clock.elapsed_ms() > t0, "对局中计时应增长")
+	check(scene.time_label.text != "", "HUD 上应显示计时")
+	check(scene.time_label.text.contains(":"), "计时用 m:ss.d 形式（宽度稳定不跳动）")
+	# HUD 的计时是**按 0.1 秒节流**更新的（每帧 set_text 会白白触发布局重排），
+	# 所以比较时要按同一个精度截断，否则读到「刚跨过 0.1 秒」的那一帧就会假失败。
+	check(scene.time_label.text == Leaderboard.format_clock((scene.clock.elapsed_ms() / 100) * 100),
+		"HUD 计时文本应与秒表的 0.1 秒节流值一致")
+
+	# ② 选关界面打开：停表（否则玩家可以开着界面慢慢想）
+	scene._open_level_select()
+	check(not scene.clock.is_running(), "选关界面打开的那一刻就应停表（不等下一帧）")
+	await create_timer(0.25).timeout
+	var mid: int = scene.clock.elapsed_ms()
+	await create_timer(0.2).timeout
+	check(scene.clock.elapsed_ms() == mid, "停在选关界面期间时间不应增长")
+	scene.level_select.close()
+	await create_timer(0.15).timeout
+	check(scene.clock.is_running(), "回到游戏后应继续计时")
+
+	# ③ 坠落：停表（玩家这时只能重开，不该继续累计）
+	scene.game.lost_flag = true
+	await create_timer(0.05).timeout
+	check(not scene.clock.is_running(), "坠落时应停表")
+	var lost_at: int = scene.clock.elapsed_ms()
+	await create_timer(0.2).timeout
+	check(scene.clock.elapsed_ms() == lost_at, "坠落之后不应继续累计（玩家这时只能重开）")
+	scene.game.lost_flag = false
+
+	# ④ 切后台 / 失焦：停表 —— 手机上来个电话不能算进成绩
+	scene._notification(Node.NOTIFICATION_APPLICATION_PAUSED)
+	check(not scene.clock.is_running(), "切后台应立刻停表")
+	await create_timer(0.2).timeout
+	var bg: int = scene.clock.elapsed_ms()
+	await create_timer(0.2).timeout
+	check(scene.clock.elapsed_ms() == bg, "切后台期间不应累计（来电不能算进成绩）")
+	scene._notification(Node.NOTIFICATION_APPLICATION_RESUMED)
+	await create_timer(0.05).timeout
+	check(scene.clock.is_running(), "回到前台应继续计时")
+
+	# ⑤ 重开：计时归零重新开始（而不是接着上一局的秒数继续跑）
+	scene._restart()
+	check(scene.clock.elapsed_ms() < 50, "重开应立刻把计时归零")
+	await create_timer(0.4).timeout
+	check(scene.clock.is_running(), "重开后计时应重新开始")
+	check(scene.clock.elapsed_ms() >= 300 and scene.clock.elapsed_ms() < 1200,
+		"重开后从零重新计（而不是接着上一局的秒数继续跑）")
+
+	# ⑥ 通关：记录本局用时（放在最后：通关会触发自动换关过渡，会把状态搅浑）
+	scene._do_move(Vector3i(1, 0, 0))
+	scene._do_move(Vector3i(1, 0, 0))
+	await create_timer(0.1).timeout
+	var won_time: int = scene.clock.elapsed_ms()
+	check(won_time > 0, "通关时应该已累计了一段用时")
+	scene.game.won_flag = true
+	scene._on_won()
+	await create_timer(0.6).timeout
+	var key: String = scene._level_key(scene.current_index)
+	check(scene.progress.best_time(key) == won_time or scene.progress.best_time(key) > 0,
+		"通关应把本局用时写进记录")
+	check(not scene.clock.is_running(), "通关后应停表")
+	check(scene.win_label.text.contains("用时"), "通关文案要报出用时")
+	scene.game.won_flag = false
+	await create_timer(1.4).timeout   # 等自动换关过渡走完再释放场景
+
+	# ⑥ 重开：计时归零重新开始（而不是接着上一局的秒数继续跑）
+	scene._restart()
+	check(scene.clock.elapsed_ms() < 50, "重开应立刻把计时归零")
+	await create_timer(0.4).timeout
+	check(scene.clock.is_running(), "重开后计时应重新开始")
+	check(scene.clock.elapsed_ms() >= 300 and scene.clock.elapsed_ms() < 1200,
+		"重开后从零重新计（而不是接着上一局的秒数继续跑）")
+
+	scene.free()
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
 
 
 func _test_tv_input() -> void:

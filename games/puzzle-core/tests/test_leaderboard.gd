@@ -13,6 +13,7 @@ var failures: int = 0
 
 func _init() -> void:
 	_remove(TMP)
+	_test_time()
 	_test_empty()
 	_test_summary()
 	_test_board_text()
@@ -60,6 +61,45 @@ func _moves(n: int) -> Array:
 
 
 # ---- 测试组 ----
+
+func _test_time() -> void:
+	# 用时格式化：边界要盯死，因为它是玩家直接读的数
+	check(Leaderboard.format_time(-1) == "—", "没有记录显示占位符")
+	check(Leaderboard.format_time(0) == "0.0 秒", "0 毫秒")
+	check(Leaderboard.format_time(12400) == "12.4 秒", "12.4 秒")
+	check(Leaderboard.format_time(999) == "1.0 秒", "不足一秒也显示一位小数")
+	check(Leaderboard.format_time(59900) == "59.9 秒", "59.9 秒仍在秒档")
+	check(Leaderboard.format_time(60000) == "1:00.0", "整 60 秒切到分钟档")
+	check(Leaderboard.format_time(62500) == "1:02.5", "1 分 2.5 秒")
+	check(Leaderboard.format_time(3600000) == "60:00.0", "一小时也只是分钟数变大，不跳档")
+
+	var tmp := "user://test_lb_time.json"
+	_remove(tmp)
+	var pr = Progress.new(tmp)
+	check(Leaderboard.best_time_text(pr, "level_01") == "", "无记录时不显示最快用时")
+
+	pr.record_win("level_01", ["right", "right"], 20000)
+	check(Leaderboard.best_time_text(pr, "level_01") == "最快 20.0 秒", "有记录时给出最快用时")
+	check(Leaderboard.detail_text([{"key": "level_01", "shape": "domino", "optimal": 2}], pr, 0).contains("最快 20.0 秒"),
+		"选关详情里要能看到最快用时")
+
+	pr.record_win("level_02", ["right", "right", "right"], 30000)
+	var sum: Dictionary = Leaderboard.summary(pr, [
+		{"key": "level_01", "optimal": 2}, {"key": "level_02", "optimal": 3}, {"key": "level_03", "optimal": 4},
+	])
+	check(int(sum["timed"]) == 2, "只有计过时的关卡计入 timed")
+	check(int(sum["total_time"]) == 50000, "合计最快用时")
+	check(Leaderboard.summary_text(sum).contains("合计最快 50.0 秒"), "汇总文案要含合计最快用时")
+
+	# 旧存档（完全没有时间记录）不该冒出「合计最快 —」
+	var pr_old = Progress.new("user://test_lb_time_old.json")
+	_remove("user://test_lb_time_old.json")
+	pr_old.record_win("level_01", ["right"])
+	var sum_old: Dictionary = Leaderboard.summary(pr_old, [{"key": "level_01", "optimal": 1}])
+	check(not Leaderboard.summary_text(sum_old).contains("合计最快"), "没有计时记录时不显示合计（避免出现「—」）")
+	_remove(tmp)
+	_remove("user://test_lb_time_old.json")
+
 
 func _test_empty() -> void:
 	var p = Progress.new(TMP)

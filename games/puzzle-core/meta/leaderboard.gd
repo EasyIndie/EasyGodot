@@ -14,6 +14,33 @@ const MAX_SHOWN := 5
 
 # ── 本地榜 ─────────────────────────────────────────────
 
+static func format_time(ms: int) -> String:
+	# 用时展示：1 分钟内用「12.4 秒」，超过用「1:02.5」。
+	# 关卡普遍几十秒，所以主用秒；但长时间思考时也得能一眼读出分钟数。
+	if ms < 0:
+		return "—"
+	var total: float = float(ms) / 1000.0
+	if total < 60.0:
+		return "%.1f 秒" % total
+	var m: int = int(total) / 60
+	return "%d:%04.1f" % [m, total - float(m * 60)]
+
+
+static func format_clock(ms: int) -> String:
+	# 秒表式显示 m:ss.d：固定宽度（数字位数变化时 HUD 不会左右抖），专供计时器
+	if ms < 0:
+		return "--:--.-"
+	var total: float = float(ms) / 1000.0
+	var m: int = int(total) / 60
+	return "%d:%04.1f" % [m, total - float(m * 60)]
+
+
+static func best_time_text(progress, key: String) -> String:
+	# 「最快 12.4 秒」；无记录返回 ""
+	var t: int = progress.best_time(key)
+	return "" if t < 0 else "最快 %s" % format_time(t)
+
+
 static func runs(progress, key: String) -> Array:
 	return progress.runs(key)
 
@@ -34,6 +61,8 @@ static func summary(progress, entries: Array) -> Dictionary:
 	var completed: int = 0
 	var total_best: int = 0
 	var optimized: int = 0
+	var timed: int = 0          # 有计时记录的关卡数
+	var total_time: int = 0     # 各关最快用时之和
 	for e in entries:
 		var key: String = str(e["key"])
 		var best: int = progress.best_moves(key)
@@ -44,11 +73,17 @@ static func summary(progress, entries: Array) -> Dictionary:
 		var optimal: int = int(e.get("optimal", -1))
 		if optimal > 0 and best <= optimal:
 			optimized += 1
+		var t: int = progress.best_time(key)
+		if t >= 0:
+			timed += 1
+			total_time += t
 	return {
 		"completed": completed,
 		"total": entries.size(),
 		"total_best": total_best,
 		"optimized": optimized,
+		"timed": timed,
+		"total_time": total_time,
 	}
 
 
@@ -56,6 +91,9 @@ static func summary_text(sum: Dictionary) -> String:
 	var t := "已通关 %d / %d" % [int(sum["completed"]), int(sum["total"])]
 	if int(sum["completed"]) > 0:
 		t += "　·　总成绩 %d 步　·　已最优 %d 关" % [int(sum["total_best"]), int(sum["optimized"])]
+		# 只有真的计过时才显示（旧存档没有时间记录，否则会冒出一个「—」）
+		if int(sum.get("timed", 0)) > 0:
+			t += "　·　合计最快 %s" % format_time(int(sum["total_time"]))
 	return t
 
 
@@ -71,6 +109,9 @@ static func detail_text(entries: Array, progress, index: int) -> String:
 		parts.append("参考 %d 步" % optimal)
 	var bt: String = board_text(progress, str(e["key"]))
 	parts.append("本机榜：" + (bt if bt != "" else "暂无成绩"))
+	var tt: String = best_time_text(progress, str(e["key"]))
+	if tt != "":
+		parts.append(tt)
 	return "　·　".join(parts)
 
 

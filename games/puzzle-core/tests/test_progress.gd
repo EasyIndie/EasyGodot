@@ -13,6 +13,7 @@ var failures: int = 0
 
 func _init() -> void:
 	_remove(TMP)
+	_test_best_time()
 	_test_fresh()
 	_test_record_win()
 	_test_persistence()
@@ -133,6 +134,69 @@ func _test_replay_label_contract() -> void:
 		seen[label] = true
 		check(Moves.direction_from_label(label) == d, "标签应能还原方向: " + label)
 	check(seen.size() == 4, "应有 4 个唯一方向标签")
+
+
+func _test_best_time() -> void:
+	# 「最快时间」与「最佳步数」是两条独立记录：步数少不代表用时短
+	var tmp := "user://test_progress_time.json"
+	_remove(tmp)
+	var pr = Progress.new(tmp)
+	check(pr.best_time("level_01") < 0, "没有记录时最快时间应为 -1")
+
+	# 第一次通关：建立两条记录
+	var r1: Dictionary = pr.record_win("level_01", _labels(6), 20000)
+	check(int(r1["time_ms"]) == 20000, "返回值应回传本局用时")
+	check(bool(r1["time_improved"]), "首次计时算破纪录")
+	check(int(pr.best_time("level_01")) == 20000, "最快时间应被记录")
+	check(pr.best_labels("level_01") == 6, "步数记录不受计时影响")
+
+	# 更慢但步数更少：步数纪录刷新，时间纪录**不该**被改坏（这是最容易写错的地方）
+	var r2: Dictionary = pr.record_win("level_01", _labels(4), 35000)
+	check(bool(r2["improved"]), "步数更少应刷新步数纪录")
+	check(not bool(r2["time_improved"]), "更慢的一局不算时间纪录")
+	check(int(pr.best_time("level_01")) == 20000, "更慢的一局不能覆盖最快时间")
+	check(int(r2["prev_best_time"]) == 20000, "返回值应带出旧的时间纪录")
+	check(pr.replay("level_01")["move_count"] == 4, "回放跟的是步数纪录（4 步）")
+
+	# 步数更多但更快
+	var r3: Dictionary = pr.record_win("level_01", _labels(9), 12000)
+	check(not bool(r3["improved"]), "步数更多不应刷新步数纪录")
+	check(bool(r3["time_improved"]), "更快的一局应刷新时间纪录")
+	check(int(pr.best_time("level_01")) == 12000, "最快时间应更新为 12000")
+	check(pr.best_labels("level_01") == 4, "最快时间不能反向改坏步数纪录")
+
+	# 落盘后重新读取
+	var pr2 = Progress.new(tmp)
+	check(int(pr2.best_time("level_01")) == 12000, "最快时间应能持久化")
+	check(pr2.best_time_count() == 1, "有计时记录的关卡数应为 1")
+	var rs: Array = pr2.runs("level_01")
+	check(rs.size() == 3, "本机榜应有三局")
+	var any_time := false
+	for r in rs:
+		if int(r.get("time_ms", -1)) == 12000:
+			any_time = true
+	check(any_time, "本机榜每局都应带自己的用时")
+
+	# 未计时的调用（time_ms 缺省）不能污染时间记录
+	var pr3 = Progress.new(tmp)
+	var r4: Dictionary = pr3.record_win("level_02", _labels(3))
+	check(int(r4["time_ms"]) == -1, "缺省用时为 -1（未计时）")
+	check(not bool(r4["time_improved"]), "未计时的一局不算时间纪录")
+	check(pr3.best_time("level_02") < 0, "未计时的一局不应写入最快时间")
+
+	# 重置要连时间一起清掉
+	pr3.reset()
+	check(pr3.best_time("level_01") < 0, "重置进度应清掉最快时间")
+	check(pr3.best_time_count() == 0, "重置后计时记录数应为 0")
+	_remove(tmp)
+
+
+
+func _labels(n: int) -> Array:
+	var out: Array = []
+	for _i in range(n):
+		out.append("right")
+	return out
 
 
 func _test_reset() -> void:

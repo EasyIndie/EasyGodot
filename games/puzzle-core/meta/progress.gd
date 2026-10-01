@@ -12,6 +12,9 @@
 # —— 那等于惩罚玩家重玩。
 #
 # 这一层同时是 Replay 与「排行榜基础」的数据底座：
+# 「最佳步数」与「最快时间」是两个**互相独立**的记录：步数最少的解法不一定是最快的
+# （慢慢想、反复试错往往步数更少但更慢），所以回放跟步数记录走，时间记录单独存。
+#
 #   - 每关保留一份**最佳步数的回放**（moves 为方向标签序列，可重放）
 #   - completed / best_moves 用于顺序解锁与进度展示
 extends RefCounted
@@ -24,6 +27,7 @@ var path: String = DEFAULT_PATH
 var _completed: Dictionary = {}   # {key: true} 本轮通关进度
 var _ever: Dictionary = {}        # {key: true} 曾经通关（解锁 + 记录展示，只增不减）
 var _best: Dictionary = {}        # {key: int}  最佳步数
+var _best_time: Dictionary = {}   # {key: int}  最快用时（毫秒）
 var _replays: Dictionary = {}     # {key: {moves: Array[String], move_count: int, at: int}}
 var _runs: Dictionary = {}        # {key: [{moves: int, at: int}, ...]} 按步数升序，本机榜
 
@@ -39,6 +43,7 @@ func _read() -> void:
 	_completed.clear()
 	_ever.clear()
 	_best.clear()
+	_best_time.clear()
 	_replays.clear()
 	_runs.clear()
 	if not FileAccess.file_exists(path):
@@ -60,6 +65,8 @@ func _read() -> void:
 		_ever[str(k)] = true
 	for k in d.get("best_moves", {}):
 		_best[str(k)] = int(d["best_moves"][k])
+	for k in d.get("best_times", {}):
+		_best_time[str(k)] = int(d["best_times"][k])
 	for k in d.get("replays", {}):
 		var r = d["replays"][k]
 		if r is Dictionary and (r.get("moves") is Array):
@@ -75,7 +82,12 @@ func _read() -> void:
 			var rs: Array = []
 			for r in arr:
 				if r is Dictionary:
-					rs.append({"moves": int(r.get("moves", 0)), "at": int(r.get("at", 0))})
+					# time_ms 缺省 -1 = 该局没有计时（旧存档 / 未启用计时的调用）
+					rs.append({
+						"moves": int(r.get("moves", 0)),
+						"at": int(r.get("at", 0)),
+						"time_ms": int(r.get("time_ms", -1)),
+					})
 			_runs[str(k)] = rs
 	# 兼容旧存档：老格式没有 cleared_ever → 用 completed 回填（老存档的 completed 就是历史）
 	if _ever.is_empty():
@@ -84,7 +96,11 @@ func _read() -> void:
 	# 兼容旧存档：只有最佳步数、没有本机榜时补一条，保证榜单不为空
 	for k in _best.keys():
 		if not _runs.has(k):
-			_runs[k] = [{"moves": int(_best[k]), "at": 0}]
+			_runs[k] = [{
+				"moves": int(_best[k]),
+				"at": 0,
+				"time_ms": int(_best_time.get(k, -1)),
+			}]
 
 
 func save() -> bool:
@@ -99,6 +115,7 @@ func save() -> bool:
 		"completed": _completed,
 		"cleared_ever": _ever,
 		"best_moves": _best,
+		"best_times": _best_time,
 		"replays": _replays,
 		"runs": _runs,
 	}, "\t"))
@@ -135,6 +152,15 @@ func best_moves(key: String) -> int:
 	return int(_best.get(key, -1))
 
 
+func best_time(key: String) -> int:
+	# 最快用时（毫秒）；-1 = 还没有计时记录
+	return int(_best_time.get(key, -1))
+
+
+func best_time_count() -> int:
+	return _best_time.size()
+
+
 func has_replay(key: String) -> bool:
 	var r: Dictionary = _replays.get(key, {})
 	return not r.is_empty() and not (r.get("moves", []) as Array).is_empty()
@@ -162,10 +188,11 @@ func is_unlocked(index: int, keys: Array) -> bool:
 
 # ── 写入 ───────────────────────────────────────────────
 
-func record_win(key: String, moves: Array) -> Dictionary:
-	# 记录一次通关；仅当首次或步数更少时覆盖「最佳回放」
+func record_win(key: String, moves: Array, time_ms: int = -1) -> Dictionary:
+	# 记录一次通关。time_ms < 0 表示这一局没有计时（旧调用），此时不碰时间记录。
 	var first: bool = not _completed.has(key)
 	var prev: int = int(_best.get(key, -1))
+	var prev_time: int = int(_best_time.get(key, -1))
 	var now: int = moves.size()
 	var at: int = int(Time.get_unix_time_from_system())
 	_completed[key] = true
@@ -173,13 +200,16 @@ func record_win(key: String, moves: Array) -> Dictionary:
 
 	# 本机榜：每局都进榜，按步数升序，只保留前 MAX_RUNS 条
 	var rs: Array = (_runs.get(key, []) as Array).duplicate()
-	rs.append({"moves": now, "at": at})
+	rs.append({"moves": now, "at": at, "time_ms": time_ms})
 	rs.sort_custom(func(a, b) -> bool: return int(a["moves"]) < int(b["moves"]))
 	if rs.size() > MAX_RUNS:
 		rs.resize(MAX_RUNS)
 	_runs[key] = rs
 
 	var improved: bool = prev < 0 or now < prev
+	var time_improved: bool = time_ms >= 0 and (prev_time < 0 or time_ms < prev_time)
+	if time_improved:
+		_best_time[key] = time_ms
 	if improved:
 		_best[key] = now
 		_replays[key] = {
@@ -188,7 +218,15 @@ func record_win(key: String, moves: Array) -> Dictionary:
 			"at": at,
 		}
 	save()
-	return {"first_clear": first, "improved": improved, "prev_best": prev, "move_count": now}
+	return {
+		"first_clear": first,
+		"improved": improved,
+		"prev_best": prev,
+		"move_count": now,
+		"time_ms": time_ms,
+		"time_improved": time_improved,
+		"prev_best_time": prev_time,
+	}
 
 
 func reset_campaign() -> void:
@@ -203,6 +241,7 @@ func reset() -> void:
 	_completed.clear()
 	_ever.clear()
 	_best.clear()
+	_best_time.clear()
 	_replays.clear()
 	_runs.clear()
 	save()

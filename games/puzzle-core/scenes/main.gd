@@ -9,6 +9,8 @@ const TouchControls = preload("res://meta/touch_controls.gd")
 const UiLayout = preload("res://meta/ui_layout.gd")
 const RenderQuality = preload("res://meta/render_quality.gd")
 const Ending = preload("res://meta/ending.gd")
+const Leaderboard = preload("res://meta/leaderboard.gd")
+const Stopwatch = preload("res://meta/stopwatch.gd")
 
 var game: Node3D = null
 var cam: Camera3D = null
@@ -17,6 +19,9 @@ var levels: Array = []          # 关卡路径列表（res://...）
 var entries: Array = []         # 关卡元数据（与 levels 同序）：{key, path, shape, optimal, difficulty}
 var current_index: int = -1
 var progress = null             # 玩家进度（已完成 / 最佳步数 / 最佳回放）
+var clock = null                # 秒表：最快时间记录（起停规则见 _clock_should_run）
+var _app_paused: bool = false   # 切后台 / 失焦：计时与画质采样都要停
+var _clock_shown: int = -1      # HUD 上已经画出的计时（只在真正变化时改文本）
 var level_select = null         # 选关界面
 var _run_moves: Array = []      # 本局已走的方向标签序列（用于 Replay）
 const REPLAY_BEAT := 0.34   # 回放每步之间的停顿（让回放看起来像“一个人在玩”）
@@ -42,6 +47,7 @@ var _q_elapsed: float = 0.0
 # HUD 节点
 var level_label: Label
 var moves_label: Label
+var time_label: Label
 var win_label: Label
 var fail_label: Label
 var help_label: Label
@@ -95,6 +101,7 @@ func _ready() -> void:
 	game.moved.connect(_on_moved)
 	game.won.connect(_on_won)
 	game.fell.connect(_on_fell)
+	clock = Stopwatch.new()
 	_load_level(0, false)
 	_apply_tv_ui_scale()
 	# 移动端的「返回」：根窗口发 go_back_requested（Android 返回键 / iOS 边缘返回手势）。
@@ -158,6 +165,8 @@ func _apply_render_quality() -> void:
 
 
 func _process(delta: float) -> void:
+	_refresh_clock()
+	_update_clock_label()
 	# 自适应画质：按实测帧时间升降档（带滞回，避免抖动）
 	_q_accum += delta
 	_q_frames += 1
@@ -243,8 +252,13 @@ func _notification(what: int) -> void:
 	# 不清零就会把画质档位一次打到底（弱机型尤其明显）。
 	match what:
 		NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT:
+			# 切后台要停表：接个电话回来发现「最快时间」多了三分钟，玩家会认为记录是假的
+			_app_paused = true
+			_refresh_clock()
 			_reset_quality_sampling()
 		NOTIFICATION_APPLICATION_RESUMED, NOTIFICATION_APPLICATION_FOCUS_IN:
+			_app_paused = false
+			_refresh_clock()
 			_reset_quality_sampling()
 
 
@@ -260,6 +274,47 @@ func _on_viewport_resized() -> void:
 	_update_safe_area()
 	_apply_tv_ui_scale()
 	_refresh_bands()
+
+
+func _clock_should_run() -> bool:
+	# 计时的起停规则集中在**一个函数**里（而不是各处零散 start/stop）：
+	# 只要漏了一条分支，玩家的「最快时间」就被污染了，而这种错误手动测试几乎发现不了。
+	# 任何打断「专注解题」的状态都必须停表：载入过渡 / 回放 / 选关 / 庆祝 / 切后台 / 已坠落 / 已通关
+	if clock == null or game == null:
+		return false
+	if transitioning or _replaying or _app_paused:
+		return false
+	if game.is_lost() or game.is_won():
+		return false
+	if level_select != null and level_select.is_open():
+		return false
+	if ending != null and ending.is_open():
+		return false
+	return true
+
+
+func _refresh_clock() -> void:
+	# 幂等 → 可以放心每帧调用（状态没变时是空操作）
+	if clock != null:
+		clock.set_running(_clock_should_run())
+
+
+func _reset_clock() -> void:
+	if clock != null:
+		clock.reset()
+	_clock_shown = -1
+
+
+func _update_clock_label(force: bool = false) -> void:
+	# 只在**显示的百分秒位真的变了**时才写文本：每帧 set_text 会白白触发布局重排
+	if time_label == null or clock == null:
+		return
+	var ms: int = clock.elapsed_ms()
+	var tick: int = ms / 100
+	if not force and tick == _clock_shown:
+		return
+	_clock_shown = tick
+	time_label.text = Leaderboard.format_clock(ms)
 
 
 func _is_tv_like() -> bool:
@@ -527,6 +582,8 @@ func _load_level(index: int, animated: bool = true) -> void:
 
 
 func _do_load(index: int) -> void:
+	# 计时归零的唯一位置：重开、换关、回放复位全都走 _do_load（单一真相）
+	_reset_clock()
 	current_index = clampi(index, 0, levels.size() - 1)
 	var ok: bool = game.load_level(levels[current_index])
 	if ok:
@@ -685,6 +742,9 @@ func _open_level_select() -> void:
 	level_select.touch_mode = _touch_active
 	level_select.set_safe_insets(_safe_insets)
 	level_select.open_with(entries, progress, current_index)
+	# 停表必须放在**界面真正打开之后**：判据是 level_select.is_open()，
+	# 放在 open_with 之前的话判据还是假，等于没停（这里踩过一次）
+	_refresh_clock()
 
 
 func _on_touch_restart() -> void:
@@ -815,8 +875,11 @@ func _on_won() -> void:
 	# 而不是「当前已全部通关」。后者是个持久状态 —— 全部通关之后再随便打通一关
 	# （比如回头刷第 1 关）都会被再恭喜一次（真实 bug）。
 	# 所以必须在 record_win **之前**快照。
+	# 先在**通关这一刻**停表再取值：靠 _process 的兜底刷新会晚一帧（最多 16ms），
+	# 而记录是毫秒级的，不该被渲染节奏影响。
+	_refresh_clock()
 	var was_all_done: bool = _all_completed()
-	var res: Dictionary = progress.record_win(_level_key(current_index), _run_moves)
+	var res: Dictionary = progress.record_win(_level_key(current_index), _run_moves, clock.elapsed_ms())
 	_update_hud()
 	win_label.text = _win_text(res)
 	win_label.visible = true
@@ -834,11 +897,17 @@ func _on_won() -> void:
 
 
 func _win_text(res: Dictionary) -> String:
+	# 步数纪录与时间纪录可以各自独立地被打破（见 progress.gd 顶部的说明）
 	var base := "通关! 步数: %d" % int(res["move_count"])
+	var t: int = int(res.get("time_ms", -1))
+	if t >= 0:
+		base += "　·　用时 %s" % Leaderboard.format_time(t)
 	if bool(res["first_clear"]):
 		return base + "　·　首次通关"
 	if bool(res["improved"]):
-		return base + "　·　新纪录!（原 %d）" % int(res["prev_best"])
+		return base + "　·　步数新纪录!（原 %d）" % int(res["prev_best"])
+	if bool(res.get("time_improved", false)):
+		return base + "　·　时间新纪录!（原 %s）" % Leaderboard.format_time(int(res.get("prev_best_time", -1)))
 	return base
 
 
@@ -853,6 +922,7 @@ func _win_beat() -> void:
 
 
 func _on_fell() -> void:
+	_refresh_clock()   # 坠落即停表（等下一帧兜底会多算一帧）
 	_update_hud()
 	if _replaying:
 		fail_label.text = "回放异常结束　（Esc 退出）"
@@ -862,6 +932,9 @@ func _on_fell() -> void:
 	# 触屏上没有 R 键，提示必须指向屏幕上那个按钮（只说“重开”等于没说）
 	if touch_controls != null and touch_controls.is_shown():
 		fail_label.text = "坠落！方块掉出了棋盘　·　点右下「重开」"
+	elif _is_tv_like():
+		# 遥控器上没有 R 键，照抄桌面文案等于告诉玩家一个不存在的键
+		fail_label.text = "坠落！方块掉出了棋盘　（按确认键重开）"
 	else:
 		fail_label.text = "坠落！方块掉出了棋盘　（按 R 重开）"
 	fail_label.visible = true
@@ -884,6 +957,7 @@ func _update_hud() -> void:
 	# 跳到第 18 关时看到 18/20 会让人误以为快通关了，实际上只通了 3 关。
 	progress_bar.value = float(done)
 	moves_label.text = "步数  %d" % game.move_count
+	_update_clock_label(true)
 
 	# 最佳 / 参考步数：给「刷分」提供明确目标
 	var key: String = _level_key(current_index)
@@ -891,14 +965,22 @@ func _update_hud() -> void:
 	var optimal: int = -1
 	if current_index >= 0 and current_index < entries.size():
 		optimal = int(entries[current_index].get("optimal", -1))
-	var parts: Array = []
+	# 面板宽度只有 196px：三条记录挤在一行会被直接裁掉（实测「已最…」少半截），
+	# 所以拆成两行短文本 —— 竖向空间是富余的，横向才是瓶颈。
+	var lines: Array = []
+	var step_parts: Array = []
 	if best > 0:
-		parts.append("最佳 %d" % best)
+		step_parts.append("最佳 %d" % best)
 		if optimal > 0 and best == optimal:
-			parts.append("已最优")
+			step_parts.append("已最优")
 	elif optimal > 0:
-		parts.append("参考 %d" % optimal)
-	best_label.text = "　·　".join(parts) if parts.size() > 0 else "　"
+		step_parts.append("参考 %d" % optimal)
+	if step_parts.size() > 0:
+		lines.append("　·　".join(step_parts))
+	var bt: int = progress.best_time(key)
+	if bt >= 0:
+		lines.append("最快 %s" % Leaderboard.format_clock(bt))
+	best_label.text = "\n".join(lines) if lines.size() > 0 else "　"
 
 
 func _wait_for_anim() -> void:
@@ -1144,6 +1226,12 @@ func _setup_hud() -> void:
 	moves_label.add_theme_font_size_override("font_size", 21)
 	moves_label.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0))
 	rcol.add_child(moves_label)
+	time_label = Label.new()
+	time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	time_label.add_theme_font_size_override("font_size", 15)
+	time_label.add_theme_color_override("font_color", Color(0.72, 0.82, 0.98))
+	time_label.text = Leaderboard.format_clock(0)
+	rcol.add_child(time_label)
 	best_label = Label.new()
 	best_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	best_label.add_theme_font_size_override("font_size", 13)
