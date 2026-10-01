@@ -9,6 +9,15 @@ config_version=5
 config/name="Puzzle Core"
 config/description="Game Factory 的第一个试点游戏：3D 几何滚动解谜。验证自动化游戏制作工作流。"
 config/version="0.1.0"
+; 应用图标（1024×1024）。这一个文件同时是：
+;   · 桌面窗口图标
+;   · Android 启动器图标（导出时自动生成各密度）
+;   · iOS 启动器图标（导出时自动生成各尺寸）
+; 由 tools/make_store_assets.gd 生成，改配色后重跑即可（不要手工 P 图，会与游戏配色脱节）。
+config/icon="res://icon.png"
+; Android 返回键 / iOS 边缘返回手势交给我们自己处理（见 main.gd::_notification）。
+; 默认是 true = 按返回键直接退出游戏，玩家会以为「闪退」。
+config/quit_on_go_back=false
 run/main_scene="res://scenes/main.tscn"
 
 [display]
@@ -27,6 +36,11 @@ window/size/viewport_height=720
 ;     在 4K 上会偏大，反而破坏一致性。像素比由 Web 端的 DPR 预算控制
 ;     （workflow/web/head_include.html），原生平台由系统 DPI 缩放处理。
 window/stretch/mode="disabled"
+
+; 屏幕方向：6 = SENSOR（横竖屏都允许）。
+; 本作的 UI 是分辨率无关的，横竖屏都做过适配（触屏控件会重排），所以不锁方向；
+; 玩家躺着/坐着都能玩，也不用维护两套布局。
+window/handheld/orientation=6
 
 [gui]
 

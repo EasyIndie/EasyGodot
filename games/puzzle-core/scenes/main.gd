@@ -96,6 +96,10 @@ func _ready() -> void:
 	game.won.connect(_on_won)
 	game.fell.connect(_on_fell)
 	_load_level(0, false)
+	# 移动端的「返回」：根窗口发 go_back_requested（Android 返回键 / iOS 边缘返回手势）。
+	# 必须在 project.godot 里把 application/config/quit_on_go_back 设为 false，
+	# 否则引擎会直接退出（表现就是「按一下返回 = 闪退」）。
+	get_tree().root.go_back_requested.connect(_on_back_requested)
 	_apply_render_quality()
 	_update_safe_area()
 	_refresh_bands()
@@ -167,6 +171,56 @@ func _process(delta: float) -> void:
 	if next != _quality_tier:
 		_quality_tier = next
 		_apply_render_quality()
+
+
+func back_action() -> String:
+	# 「返回」该做什么 —— **纯判断**，不产生副作用。
+	# 拆出来是为了能测：其中一个分支会退出游戏，测不了就会变成“没人敢碰”的死代码。
+	# 层级（顺序很重要）：
+	#   庆祝层 → 选关 → 回放 → 对局中（打开选关）→ 在选关里（退出游戏）
+	# 玩家因此永远不会因为误触返回而丢掉当前局面；要退出得先回主页再按一次。
+	if ending != null and ending.is_open():
+		return "close_ending"
+	if level_select != null and level_select.is_open():
+		# 选关界面相当于本作的「主页」（进度、最佳、回放都在这里），在主页按返回才是退出
+		return "quit"
+	if _replaying:
+		return "stop_replay"
+	if transitioning or game == null or game.is_won() or game.is_lost():
+		return "ignore"
+	return "open_select"
+
+
+func _on_back_requested() -> void:
+	match back_action():
+		"close_ending":
+			ending.close()
+		"quit":
+			get_tree().quit()
+		"stop_replay":
+			_replaying = false
+			if touch_controls != null:
+				touch_controls.set_replay_playing(false)
+			_reset_to_start()
+		"open_select":
+			_open_level_select()
+
+
+func _notification(what: int) -> void:
+	# 切到后台 / 被系统打断（来电、切应用）：
+	# 自适应画质是按**帧时间平均值**升降档的，切后台回来第一帧的 delta 可能是几百毫秒，
+	# 不清零就会把画质档位一次打到底（弱机型尤其明显）。
+	match what:
+		NOTIFICATION_APPLICATION_PAUSED, NOTIFICATION_APPLICATION_FOCUS_OUT:
+			_reset_quality_sampling()
+		NOTIFICATION_APPLICATION_RESUMED, NOTIFICATION_APPLICATION_FOCUS_IN:
+			_reset_quality_sampling()
+
+
+func _reset_quality_sampling() -> void:
+	_q_accum = 0.0
+	_q_frames = 0
+	_q_elapsed = 0.0
 
 
 # ── 安全区域 ──────────────────────────────────────────────

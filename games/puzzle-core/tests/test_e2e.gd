@@ -45,6 +45,7 @@ func _run() -> void:
 	await _test_swipe_hint()
 	await _test_touch_safe_area()
 	await _test_ending()
+	await _test_mobile_back()
 	ProjectSettings.set_setting("puzzle/progress_path", "")
 	_remove_tmp(SUITE_SAVE)
 	_report_and_quit()
@@ -546,6 +547,51 @@ func _off_grid(p: Vector3) -> bool:
 		if absf(v - roundf(v * 2.0) * 0.5) > 0.03:
 			return true
 	return false
+
+
+func _test_mobile_back() -> void:
+	# 移动端的「返回」（Android 返回键 / iOS 边缘返回手势）= 往上退一层，不是退出游戏。
+	# 注意：这个决策里有一个分支会 get_tree().quit()（在选关界面按返回 = 退出）。
+	# 所以断言的是 **决策函数 back_action()** 而不是直接发信号 ——
+	# 否则跑到那一支就会把测试进程一起退掉（这类“没人敢碰”的分支最容易腐坏）。
+	var tmp := "user://test_e2e_back.json"
+	_remove_tmp(tmp)
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	scene.game.animate = false
+
+	# 对局中 → 打开选关
+	check(scene.back_action() == "open_select", "对局中按返回应打开选关界面")
+	scene._on_back_requested()
+	await create_timer(0.25).timeout
+	check(scene.level_select.is_open(), "按返回后选关界面应打开")
+	check(scene.back_action() == "quit", "在选关界面（主页）按返回才是退出游戏")
+
+	# 回放中 → 停止回放（而不是退出、也不是弹选关）
+	scene.level_select.close()
+	await create_timer(0.25).timeout
+	var key: String = str(scene.entries[0]["key"])
+	var sol: Dictionary = Solver.new(scene.game.board, scene.game.state).solve()
+	scene.progress.record_win(key, sol["solution"])
+	await scene._play_replay()
+	check(not scene._replaying, "回放应已结束")
+
+	# 庆祝层 → 先关庆祝层（再按一次才回到选关）
+	scene._show_ending()
+	check(scene.ending.is_open(), "庆祝层应已打开")
+	check(scene.back_action() == "close_ending", "庆祝层打开时按返回应先关庆祝层")
+	scene._on_back_requested()
+	check(not scene.ending.is_open(), "按返回后庆祝层应关闭")
+
+	# 信号确实接到了决策函数上（不是只写了个函数没人调）
+	check(scene.get_tree().root.go_back_requested.is_connected(scene._on_back_requested),
+		"根窗口的 go_back_requested 应连到 _on_back_requested")
+
+	await create_timer(0.25).timeout
+	scene.free()
+	_remove_tmp(tmp)
 
 
 func _test_respawn_animation() -> void:

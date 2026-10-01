@@ -84,6 +84,9 @@ workflow/scripts/gf-export.sh games/my-game
 | `workflow/scripts/gf-pages.sh [game] [--deploy]` | 生成 / 发布 GitHub Pages 静态站点 |
 | `workflow/scripts/gf-font-subset.sh [game]` | 按项目实际用字重建字体子集（体积/内存优化）。**改了 UI 文案后必须重跑**（`test_font.gd` 会拦截缺字形） |
 | `workflow/scripts/gf-web-inject.sh [game]` | 把 `workflow/web/head_include.html` 同步进 `export_presets.cfg`（安全区域 / 像素比预算 / 移动端手势隔离），`gf-export.sh` 会自动调用 |
+| `workflow/scripts/gf-export.sh [game] android` / `android-apk` / `ios` | 出 Android AAB（上架）/ APK（本机试玩）/ iOS 包。iOS **必须在 macOS 上**，脚本会明确拒绝并给出方案；Android 会先检查 SDK 路径与构建模板 |
+| `workflow/scripts/gf-android-env.sh [SDK目录] [JDK目录]` | 把 Android SDK / JDK 路径写进 Godot **编辑器设置**（引擎不读 `ANDROID_SDK_ROOT` 这类环境变量）。自动备份、幂等 |
+| `workflow/godot-bin/godot --headless --path <game> --install-android-build-template` | 安装 Android 构建模板（AAB 必需，生成 `android/build/`，不入库） |
 
 **pi 斜杠命令**（装 `workflow/pi-extensions/game-factory.ts` 后，免开终端）：
 
