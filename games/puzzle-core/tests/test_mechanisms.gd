@@ -29,6 +29,7 @@ func _init() -> void:
 	_test_toggle_needed()
 	_test_solver_needs_mech_key()
 	_test_validate_necessity()
+	_test_bad_data_is_loud()
 	_test_format_backcompat()
 
 	var result: Dictionary = {
@@ -326,6 +327,32 @@ func _test_validate_necessity() -> void:
 	var rep3: Dictionary = Validate.validate_dict(broken)
 	check(rep3["status"] == "invalid", "指向不存在的机关应判无效")
 	check(str(rep3["errors"]).contains("unknown mechanism"), "错误信息要指出引用问题（%s）" % str(rep3["errors"]))
+
+
+func _test_bad_data_is_loud() -> void:
+	# **坏关卡必须响亮失败**。这里守的是一个真实事故：
+	# 生成器把 holes 写成 Vector2i，JSON.stringify 序列化成字符串 "(7, 3)"，
+	# 加载器却用 h[0]/h[1] 硬读 → int("(")=0 → "沟"被静默读成完全不同的坐标。
+	# 关卡文件看着有洞，跑起来却不对，而且**一点报错都没有**。
+	for bad in ["(7, 3)", 7, {"x": 7, "y": 3}, [7], ["a", "b"]]:
+		var lv: Dictionary = Loader.load_dict({
+			"id": "bad", "grid": {"x": 8, "z": 8}, "holes": [bad], "goal": [[4, 4]],
+			"start": {"shape": "domino", "orientation": "standing", "position": [1, 0, 1]},
+		})
+		check(lv.has("error"), "非法空洞坐标必须报错（%s → %s）" % [str(bad), str(lv.get("error", "no error"))])
+	# 合法形式两种都要接受
+	var ok1: Dictionary = Loader.load_dict({
+		"id": "a", "grid": {"x": 8, "z": 8}, "holes": [[1, 2]], "goal": [[4, 4]],
+		"start": {"shape": "domino", "orientation": "standing", "position": [1, 0, 1]},
+	})
+	check(not ok1.has("error"), "数组形式应可加载")
+	check(ok1["board"].holes.has(Vector2i(1, 2)), "数组形式应被正确解析")
+	var ok2: Dictionary = Loader.load_dict({
+		"id": "b", "grid": {"x": 8, "z": 8}, "holes": [Vector2i(3, 4)], "goal": [Vector2i(4, 4)],
+		"start": {"shape": "domino", "orientation": "standing", "position": [1, 0, 1]},
+	})
+	check(not ok2.has("error"), "Vector2i 形式也应可加载（内存里构造关卡用）")
+	check(ok2["board"].holes.has(Vector2i(3, 4)), "Vector2i 形式应被正确解析")
 
 
 func _test_format_backcompat() -> void:
