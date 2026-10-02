@@ -37,6 +37,15 @@ var lite_mode: bool = false
 # 触屏操作层（仅在触屏设备显示；可用 ?touch=1 / ?touch=0 强制，桌面可按 T 切换）
 var touch_controls = null
 var _touch_active: bool = false
+# 动画期间的输入缓冲（"最后一次"方向）：滚动动画约 0.3 秒，这期间玩家的输入
+# 会被 try_move 直接丢掉 —— 真机反馈就是"不跟手"。这里记住最后一次方向，
+# 动画一结束立刻执行；只保留最后一次（不是队列），避免动画后突然连滚好几格。
+var _pending_move: Vector3i = Vector3i.ZERO
+var _pending_at: int = 0
+# 缓冲的过期时间只当"安全网"用：必须长于所有动画（入场下落动画就有 1 秒多，
+# 太短会在动画结束时把玩家的输入当过期丢掉 —— 那正是"不跟手"的另一种表现）。
+# 真正的失效由"状态变了就清空"负责（换关 / 打开界面）。
+const PENDING_TTL_MS := 1500
 var _query_string: String = ""
 # 通关庆祝层（全部 20 关通关后出现）
 var ending = null
@@ -173,6 +182,7 @@ func _apply_render_quality() -> void:
 func _process(delta: float) -> void:
 	_refresh_clock()
 	_update_clock_label()
+	_flush_pending_move()
 	# 自适应画质：按实测帧时间升降档（带滞回，避免抖动）
 	_q_accum += delta
 	_q_frames += 1
@@ -537,13 +547,49 @@ func _apply_touch_visibility() -> void:
 	_refresh_bands()
 
 
+func _can_move() -> bool:
+	# 现在能不能走一步：换关过渡 / 回放 / 选关界面 / 庆祝界面都不行。
+	# 集中成一个函数，是因为"能不能动"的判据被三处用到（键盘、触屏、缓冲冲刷），
+	# 分散写迟早漏掉一处（缓冲的输入就会在界面关掉后突然执行）。
+	if transitioning or _replaying:
+		return false
+	if level_select != null and level_select.is_open():
+		return false
+	if ending != null and ending.is_open():
+		return false
+	return true
+
+
+func _clear_pending_move() -> void:
+	# 局面要变了（换关、开界面）：缓冲区里的方向不再对应当前棋盘，必须丢掉，
+	# 否则界面一关就会突然滚一下（缓冲最典型的 bug）
+	_pending_move = Vector3i.ZERO
+
+
+func _flush_pending_move() -> void:
+	# 动画结束后执行缓冲的那个方向。超过 PENDING_TTL_MS 视为过期（切过后台等），
+	# 直接丢弃 —— 宁可少走一步，也不要在玩家已经做别的事时突然滚一下。
+	if _pending_move == Vector3i.ZERO:
+		return
+	if not _can_move() or game == null:
+		if Time.get_ticks_msec() - _pending_at > PENDING_TTL_MS:
+			_pending_move = Vector3i.ZERO
+		return
+	if game.animating:
+		# 入场下落是纯观赏动画（1 秒多）：玩家的意图优先，直接补到终态立刻执行，
+		# 否则每次进关卡的第一下都会慢半拍。滚动动画照旧等它演完。
+		if not game.snap_spawn():
+			if Time.get_ticks_msec() - _pending_at > PENDING_TTL_MS:
+				_pending_move = Vector3i.ZERO
+			return
+	var d: Vector3i = _pending_move
+	_pending_move = Vector3i.ZERO
+	_do_move(d)
+
+
 func _on_touch_direction(d: Vector3i) -> void:
 	# 触屏滑动/方向键与键盘走同一条路径，但要避开选关、过渡、回放、庆祝界面
-	if transitioning or _replaying:
-		return
-	if level_select != null and level_select.is_open():
-		return
-	if ending != null and ending.is_open():
+	if not _can_move():
 		return
 	var ok: bool = _do_move(d)
 	# 玩家真的动了一次方块 → 手势提示的使命完成
@@ -688,6 +734,7 @@ func _do_load(index: int) -> void:
 	var ok: bool = game.load_level(levels[current_index])
 	if ok:
 		_run_moves.clear()
+		_pending_move = Vector3i.ZERO
 		win_label.visible = false
 		fail_label.visible = false
 		replay_label.visible = false
@@ -828,6 +875,7 @@ func _all_completed() -> bool:
 
 
 func _show_ending() -> void:
+	_clear_pending_move()
 	# 防御性判断：庆祝层只在**真的全部通关**时出现，
 	# 免得将来某个调用点漏判就把庆祝动画提前放出来（那样通关成就就贬值了）
 	if ending == null or not _all_completed():
@@ -837,6 +885,7 @@ func _show_ending() -> void:
 
 
 func _open_level_select() -> void:
+	_clear_pending_move()
 	# 通关/坠落动画期间不要弹选关（否则会和自动换关过渡打架）
 	if transitioning or _replaying or game.is_won() or game.is_lost():
 		return
@@ -1122,6 +1171,11 @@ func _do_move_animated(d: Vector3i) -> bool:
 func _do_move(d: Vector3i) -> bool:
 	# 统一入口：记录本局移动（用于 Replay）后再交给 Game。
 	# 返回是否真的走成了（手势提示要靠它判断“玩家学会了”）。
+	if game.animating:
+		# 动画进行中不丢输入：记下最后一次方向，动画结束立刻补上（见 _flush_pending_move）
+		_pending_move = d
+		_pending_at = Time.get_ticks_msec()
+		return false
 	if game.try_move(d):
 		_run_moves.append(Moves.direction_label(d))
 		return true
@@ -1221,7 +1275,9 @@ func _update_touch_screen_dirs() -> void:
 	for d in Moves.DIRS:
 		var v: Vector2 = cam.unproject_position(center + Vector3(d)) - origin
 		if v.length() > 0.0001:
-			dirs[d] = v.normalized()
+			# **不归一化**：长度就是"走一格在屏幕上的像素数"，手势阈值按它缩放，
+			# 所以 5 寸手机和 12 寸平板上"滑一格"的手感一致（大屏不会轻轻一碰就滚）。
+			dirs[d] = v
 	if dirs.size() == Moves.DIRS.size():
 		touch_controls.set_screen_dirs(dirs)
 

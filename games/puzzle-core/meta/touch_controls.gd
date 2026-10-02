@@ -11,6 +11,10 @@
 #     所以「往哪滑，方块就往哪滚」。早期按网格轴映射的结果是：
 #     手指往上滑，方块往右上滚 —— 玩家立刻会觉得“不听话”。
 #
+#  1b) 方向解算与"什么时候算一次移动"分别放在 meta/gesture.gd 与
+#      meta/gesture_tracker.gd 里（纯逻辑、可逐个角度断言）。这里只负责
+#      把输入事件喂进去、把结果转成信号，并做视觉反馈。
+#
 #  2) **D-pad 摆在四角、用对角箭头**（↖↗↙↘），
 #     让「按钮位置 / 箭头方向 / 方块去向」三者一致。
 #
@@ -22,6 +26,12 @@
 #
 #  5) 触屏是“指向性”输入但**看不见规则**，所以第一次进关卡要给一次
 #     手势方向提示（对角线），并随第一次成功移动自动收起。
+#
+#  6) 拖动要有**实时反馈**：手指附近显示"当前指向 + 已滑多少"（快满时亮起），
+#     方向键同步闪一下。触屏没有光标，不给反馈玩家不知道自己有没有滑对。
+#
+#  7) 一次拖动可以**连滚多格**（像摇杆），这才是"跟手"；抬手才判定的做法
+#     在真机上被反馈为"不跟手"（真实踩过）。
 extends CanvasLayer
 
 signal direction(d: Vector3i)
@@ -31,9 +41,13 @@ signal replay_pressed
 
 const LAYOUT = preload("res://meta/ui_layout.gd")
 
-const SWIPE_MIN := 26.0        # 最小滑动距离（像素）
-const SWIPE_MAX_TIME := 0.9    # 超过此时长不算滑动
-const SWIPE_COOLDOWN := 0.12   # 触屏会再模拟一次鼠标事件，用冷却去重
+const Gesture = preload("res://meta/gesture.gd")
+const GestureTracker = preload("res://meta/gesture_tracker.gd")
+
+const TAP_SLOP := 12.0         # 小于此位移算"点按"（事件留给按钮），超过才算拖动
+const FLASH_TIME := 0.16       # 方向键命中反馈的闪烁时长
+# 注意：这里**没有**滑动时间上限。早期有（超过 0.9 秒的滑动整条丢弃），
+# 结果是"想清楚再滑"完全没反应 —— 慢滑也是滑。
 
 # 斜 45° 等距相机下，方块只能沿四个网格方向滚，它们在屏幕上成对角分布，
 # 所以 D-pad 直接**摆在对角位置、用对角箭头**：按钮位置 / 箭头 / 方块去向三者一致。
@@ -67,10 +81,14 @@ var _action_buttons: Array = []
 var _unit: float = 64.0
 var _screen_dirs: Dictionary = {}   # 由 main.gd 用相机 unproject 现算后注入
 var _insets: Dictionary = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
-var _tracking: bool = false
-var _start_pos: Vector2 = Vector2.ZERO
-var _start_time: float = 0.0
-var _cooldown: float = 0.0
+var _tracker = null            # GestureTracker：拖动 → 移动序列
+var _has_touch: bool = false   # 见过真触摸后就不再理会鼠标（触摸会再模拟一次鼠标）
+var _drag_begin: Vector2 = Vector2.ZERO
+var _drag_moved: bool = false  # 已超出"点按"范围 → 事件不再交给按钮
+var _drag_pos: Vector2 = Vector2.ZERO   # 最近一次拖动位置（反馈/查询用）
+var _btn_dirs: Array = []      # 与 _dir_buttons 一一对应的方向
+var _flash: Dictionary = {}    # 方向 → 剩余闪烁时长
+var _drag_dot: Label = null    # 手指旁的拖动指示
 var _hint_done: bool = false
 var _hint_timer: float = 0.0
 var _replay_playing: bool = false
@@ -107,9 +125,12 @@ func _ready() -> void:
 		else:
 			var b := _make_button(str(GLYPH[c]))
 			var d: Vector3i = c
-			b.pressed.connect(func() -> void: direction.emit(d))
+			# 走 _emit_dir 而不是直接 emit：这样点方向键也会更新粘滞方向、闪一下，
+			# 与滑动走完全同一条路径（同一个动作只有一套实现）
+			b.pressed.connect(func() -> void: _emit_dir(d))
 			_pad.add_child(b)
 			_dir_buttons.append(b)
+			_btn_dirs.append(d)
 
 	_actions = VBoxContainer.new()
 	_actions.add_theme_constant_override("separation", 8)
@@ -130,6 +151,18 @@ func _ready() -> void:
 
 	# 手势提示：一条会自己收起的窄条。触屏玩家不知道“对角线滑动”这套规则，
 	# 光有 D-pad 也说明不了「滑动方向 = 方块去向」。
+	# 拖动指示：跟着手指的一个小箭头 + 进度环。触屏没有光标，
+	# 玩家需要一个"我看到你在往哪滑"的确认，否则不知道自己有没有滑对。
+	_drag_dot = Label.new()
+	_drag_dot.visible = false
+	_drag_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_drag_dot.add_theme_font_size_override("font_size", 30)
+	_drag_dot.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.95))
+	_drag_dot.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
+	_drag_dot.add_theme_constant_override("shadow_offset_x", 0)
+	_drag_dot.add_theme_constant_override("shadow_offset_y", 2)
+	_root.add_child(_drag_dot)
+
 	_hint = PanelContainer.new()
 	_hint.visible = false
 	_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -181,8 +214,31 @@ func bottom_inset() -> float:
 
 
 func set_screen_dirs(dirs: Dictionary) -> void:
-	# 注入「每个网格方向在屏幕上的方向」——由相机决定，换取景自动跟随
+	# 注入「每个网格方向在屏幕上走一格的向量」——由相机决定，换取景自动跟随。
+	# **不归一化**：长度就是格子屏宽，手势阈值按它缩放（大屏小屏手感才一致）。
 	_screen_dirs = dirs
+	if _tracker != null:
+		_tracker.set_dirs(dirs)
+
+
+# 供测试/上层查询：当前手指指向的方向（没到阈值也返回）
+func drag_dir() -> Vector3i:
+	# 注意要喂**最近一次拖动位置**而不是起点：起点算出来的差值永远是 0
+	#（这个错会让拖动指示永远不亮，而方向其实是对的 —— 只有截图才能看出来）
+	if _tracker == null:
+		return Vector3i.ZERO
+	return _tracker.prev if not _tracker.active else _tracker.peek(_drag_pos)
+
+
+func screen_dirs() -> Dictionary:
+	return _screen_dirs
+
+
+# 拖动进度（0~1，距触发还差多少）——画反馈用
+func drag_ratio(pos: Vector2) -> float:
+	if _tracker == null:
+		return 0.0
+	return _tracker.ratio(pos)
 
 
 func set_replay_playing(playing: bool) -> void:
@@ -327,53 +383,143 @@ func _sb(bg: Color, border: Color) -> StyleBoxFlat:
 # ── 滑动手势 ───────────────────────────────────────────
 
 func _process(delta: float) -> void:
-	if _cooldown > 0.0:
-		_cooldown -= delta
 	if _hint_timer > 0.0:
 		_hint_timer -= delta
 		if _hint_timer <= 0.0:
 			dismiss_swipe_hint()
+	_update_flash(delta)
 
 
-static func swipe_dir(delta: Vector2, screen_dirs: Dictionary = {}) -> Vector3i:
-	# 滑动方向 → 网格方向：**按屏幕上最接近的方向**映射（而不是按网格轴），
-	# 这样「往哪滑，方块就往哪滚」。触碰阈值以下的位移不算滑动。
-	if delta.length() < SWIPE_MIN:
-		return Vector3i.ZERO
-	var dirs: Dictionary = screen_dirs if not screen_dirs.is_empty() else LAYOUT.DEFAULT_SCREEN_DIRS
-	return LAYOUT.best_dir(delta, dirs)
+# ── 拖动（唯一的入口：手指按下 → 拖动 → 抬手）──────────
+#
+# 对外暴露成三个方法而不是只吃输入事件，有两个好处：
+#   1) 测试可以直接喂坐标序列，不用构造 InputEvent（手势的边界靠断言钉住）
+#   2) 以后要加"屏幕任意处拖动"之外的入口（比如手柄触摸板）不用改这里
+
+func drag_begin(pos: Vector2) -> void:
+	if _tracker == null:
+		# 相机还没把方向注入进来时（例如刚进对局的第一帧）退回默认值，
+		# 否则那一瞬间的滑动会静默失效 —— 玩家只会觉得"有时不灵"。
+		_tracker = GestureTracker.new(_screen_dirs if not _screen_dirs.is_empty() else LAYOUT.DEFAULT_SCREEN_DIRS)
+	_tracker.begin(pos)
+	_drag_begin = pos
+	_drag_pos = pos
+	_drag_moved = false
+	_show_drag_dot(pos)
+
+
+# 返回本次是否触发了一次移动（并已通过 direction 信号发出）
+func drag_move(pos: Vector2) -> bool:
+	if _tracker == null or not _tracker.active:
+		return false
+	if not _drag_moved and pos.distance_to(_drag_begin) > TAP_SLOP:
+		_drag_moved = true
+	if _drag_moved:
+		# 拖动不再算"点按"：吃掉事件，免得同一根手指又把下面的方向键按下去。
+		# 这里在 _input 阶段（早于 GUI 处理），所以按钮收不到后续事件。
+		var vp := get_viewport()
+		if vp != null:
+			vp.set_input_as_handled()
+	_drag_pos = pos
+	var d: Vector3i = _tracker.feed(pos)
+	_update_drag_dot(pos)
+	if d != Vector3i.ZERO:
+		_emit_dir(d)
+		return true
+	return false
+
+
+func drag_end() -> void:
+	if _tracker != null:
+		_tracker.cancel()
+	_hide_drag_dot()
+
+
+func _emit_dir(d: Vector3i) -> void:
+	# 所有方向输入的唯一出口：滑动与方向键都从这里走
+	if d == Vector3i.ZERO:
+		return
+	if _tracker != null:
+		_tracker.prev = d     # 粘滞方向跟着玩家最后一次意图走
+	_flash[d] = FLASH_TIME
+	direction.emit(d)
 
 
 func _input(event: InputEvent) -> void:
 	if not visible:
 		return
-	var pos := Vector2.ZERO
-	var pressed := false
+	# 触摸设备会把触摸再模拟成鼠标事件；一旦见过真触摸就完全忽略鼠标，
+	# 否则一次滑动会被解算两遍（方块会莫名滚两格）。
 	if event is InputEventScreenTouch:
-		pos = event.position
-		pressed = event.pressed
-	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		pos = event.position
-		pressed = event.pressed
-	else:
+		_has_touch = true
+		if event.pressed:
+			if _tracker != null and _tracker.active:
+				return                 # 只认第一根手指：多指不会打乱锚点
+			drag_begin(event.position)
+		else:
+			drag_end()
 		return
-	if pressed:
-		_tracking = true
-		_start_pos = pos
-		_start_time = Time.get_ticks_msec() / 1000.0
-	else:
-		_finish(pos)
+	if event is InputEventScreenDrag:
+		_has_touch = true
+		drag_move(event.position)
+		return
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if _has_touch:
+			return
+		if event.pressed:
+			drag_begin(event.position)
+		else:
+			drag_end()
+		return
+	if event is InputEventMouseMotion and not _has_touch:
+		if event.button_mask & MOUSE_BUTTON_MASK_LEFT:
+			drag_move(event.position)
 
 
-func _finish(pos: Vector2) -> void:
-	if not _tracking:
+# ── 视觉反馈 ───────────────────────────────────────────
+
+func _show_drag_dot(pos: Vector2) -> void:
+	if _drag_dot == null:
 		return
-	_tracking = false
-	if _cooldown > 0.0:
-		return  # 触屏→鼠标的重复投递
-	if Time.get_ticks_msec() / 1000.0 - _start_time > SWIPE_MAX_TIME:
+	# 放在手指**上方偏左**：手指本身会遮住触点，指示器必须在旁边才看得见
+	_drag_dot.position = pos + Vector2(6.0, -_unit * 0.86)
+	_drag_dot.visible = true
+	_drag_dot.modulate = Color(1, 1, 1, 0.0)
+
+
+func _update_drag_dot(pos: Vector2) -> void:
+	# 指示要显示**当前指向**（peek），不是"已经触发的方向" ——
+	# 后者在没滑够时是 ZERO，会让指示永远不亮（而方向其实是对的，
+	# 只看逻辑测试发现不了，得截图才看得出来）。
+	if _drag_dot == null or not _drag_dot.visible:
 		return
-	var d: Vector3i = swipe_dir(pos - _start_pos, _screen_dirs)
-	if d != Vector3i.ZERO:
-		_cooldown = SWIPE_COOLDOWN
-		direction.emit(d)
+	var d: Vector3i = _tracker.peek(pos) if _tracker != null else Vector3i.ZERO
+	if d == Vector3i.ZERO:
+		_drag_dot.modulate = Color(1, 1, 1, 0.0)
+		return
+	_drag_dot.text = str(GLYPH.get(d, ""))
+	# 透明度随"距触发还差多少"上升：快满时亮起，玩家能感到"再多滑一点就动"
+	var r: float = drag_ratio(pos) if _tracker != null else 0.0
+	_drag_dot.modulate = Color(1.0, 1.0, 1.0, lerpf(0.16, 1.0, r))
+	_drag_dot.scale = Vector2.ONE * lerpf(0.86, 1.18, r)
+
+
+func _hide_drag_dot() -> void:
+	if _drag_dot != null:
+		_drag_dot.visible = false
+
+
+func _update_flash(delta: float) -> void:
+	if _flash.is_empty() and _drag_dot == null:
+		return
+	# 先老化再应用：闪烁只影响颜色，不改变按钮的可用状态
+	for d in _flash.keys():
+		var left: float = float(_flash[d]) - delta
+		if left <= 0.0:
+			_flash.erase(d)
+		else:
+			_flash[d] = left
+	for i in range(_dir_buttons.size()):
+		var b: Button = _dir_buttons[i]
+		var on: bool = _flash.has(_btn_dirs[i])
+		b.modulate = Color(1.10, 1.16, 1.28) if on else Color.WHITE

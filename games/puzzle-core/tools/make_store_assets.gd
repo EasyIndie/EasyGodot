@@ -26,6 +26,8 @@ const OUT_ICON := "res://icon.png"
 const OUT_STORE_ICON := "res://store_icon_512.png"
 const OUT_FEATURE := "res://store_feature_1024x500.png"
 const OUT_TV_BANNER := "res://store_tv_banner_320x180.png"
+# 超采样倍数：等轴测全是长斜边，直接按目标尺寸画会一整排锯齿
+const SUPERSAMPLE := 3
 # ── Web 页面用（跟着游戏一起发布）──────────────────────
 const OUT_FAVICON := "res://web/favicon.png"                 # 浏览器标签页图标（小尺寸专用构图）
 const OUT_APPLE_TOUCH := "res://web/apple-touch-icon.png"    # iOS 主屏图标（180×180）
@@ -72,45 +74,45 @@ func _run() -> void:
 
 func _render(w: int, h: int, kind: String, out_path: String) -> bool:
 	_ensure_dir(out_path)
-	# 透明底构图（启动画面/图标标记）：必须把视口清屏色也设为全透明，
-	# 否则"透明底"只存在于想象里 —— 截出来的图会带一层不透明底色，
-	# 到了网页上就是一块突兀的方块（真实踩过）。
-	var transparent: bool = kind == "mark" or kind == "mark_tight"
-	var prev_clear: Color = RenderingServer.get_default_clear_color()
-	var prev_transparent: bool = root.transparent_bg
-	if transparent:
-		RenderingServer.set_default_clear_color(Color(0, 0, 0, 0))
-		root.transparent_bg = true
-	root.size = Vector2i(w, h)
+	# 用 SubViewport 而不是根视口渲染，原因有二：
+	#   1) 超采样不受窗口尺寸限制（根视口会被窗口大小夹住，想放大也放不了）
+	#   2) transparent_bg 是**真**透明，不用去改全局清屏色（改全局容易漏恢复）
+	# 超采样再缩回来，斜边才不会有锯齿 —— 直接按目标尺寸画，等轴测的长斜边
+	# 在网页上会被放大到 300px，一排锯齿非常显眼（真实反馈：图示"很粗糙"）。
+	var vp := SubViewport.new()
+	vp.size = Vector2i(w * SUPERSAMPLE, h * SUPERSAMPLE)
+	vp.transparent_bg = true
+	vp.disable_3d = true
+	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	root.add_child(vp)
 	var painter := Painter.new()
 	painter.kind = kind
 	painter.fill_ratio = FILL_FEATURE
 	if kind == "icon" or kind == "mark":
 		painter.fill_ratio = FILL_ICON
 	elif kind == "mark_tight":
-		painter.fill_ratio = 0.92   # 小图标要更满：留白多等于看不见
-	root.add_child(painter)
-	painter.size = Vector2(float(w), float(h))
+		painter.fill_ratio = 0.94   # 小图标要更满：留白多等于看不见
+	vp.add_child(painter)
+	painter.size = Vector2(vp.size)
 	painter.position = Vector2.ZERO
 	await process_frame
 	await process_frame
-	var tex := root.get_texture()
+	var tex := vp.get_texture()
 	if tex == null:
 		push_error("make_store_assets: 拿不到 viewport 纹理（需要可渲染环境）")
-		painter.queue_free()
+		vp.queue_free()
 		return false
 	var img: Image = tex.get_image()
+	# 缩回目标尺寸：LANCZOS 边缘平滑且不发糊（比近邻/双线性都干净）
+	img.convert(Image.FORMAT_RGBA8)
+	img.resize(w, h, Image.INTERPOLATE_LANCZOS)
 	var err := img.save_png(ProjectSettings.globalize_path(out_path))
+	vp.queue_free()
+	await process_frame
 	if err != OK:
 		push_error("make_store_assets: 写不出 " + out_path)
-		painter.queue_free()
 		return false
 	print("  已生成 %s  %d×%d" % [out_path, img.get_width(), img.get_height()])
-	painter.queue_free()
-	await process_frame
-	if transparent:
-		RenderingServer.set_default_clear_color(prev_clear)
-		root.transparent_bg = prev_transparent
 	return true
 
 
@@ -136,14 +138,12 @@ class Painter extends Control:
 		# mark / mark_tight 是"透明底"构图：底色由平台提供（网页 CSS / boot_splash bg_color）
 		var shapes: Array = []
 		match kind:
-			"icon":
-				shapes = _icon_shapes()
 			"feature":
 				shapes = _feature_shapes()
-			"mark":
-				shapes = _mark_shapes(true)
-			_:
+			"mark", "icon":
 				shapes = _mark_shapes(false)
+			_:
+				shapes = _mark_shapes(true)   # favicon：小尺寸，去掉光晕
 		# 包围盒 → 自动缩放与居中（改构图不用手算像素）
 		var box := _bbox(shapes)
 		var u: float = minf(vp.x * fill_ratio / maxf(box.size.x, 0.001),
@@ -185,28 +185,25 @@ class Painter extends Control:
 
 	# ── 构图 ──
 
-	# 图标：立着的骨牌（2 格高）+ 前左方一格的目标格 + 影子
-	func _mark_shapes(with_ring: bool) -> Array:
-		# 品牌标记：影子 + 目标格 +（可选光圈）+ 竖立的骨牌。
-		# 小尺寸（favicon）去掉光圈：细圆环在 16px 下只会糊成一团灰。
+	# 品牌标记：立着的骨牌 + 旁边的目标格。
+	#
+	# 这一版把上一版的三个毛病一起改掉：
+	#   · 生硬的灰椭圆影子 → 多层低透明度椭圆叠出的接触阴影（Canvas 没有模糊，只能这么叠）
+	#   · "挖空"的菱形光圈（位置还偏在格子左上角）→ 居中的靶心：内嵌菱形描边 + 中心亮点
+	#   · 描边过黑（darkened 0.66）在小尺寸下糊成一团 → 同色系描边 + 三个面拉开明度
+	# small = favicon 用：去掉光晕（小尺寸下只会变成一坨糊斑）。
+	func _mark_shapes(small: bool) -> Array:
 		var out: Array = []
-		out.append(_shadow(Vector2(0.0, 0.10), Vector2(1.10, 0.50)))
+		var goal_c := _cell_center(1, 0)
+		if not small:
+			out.append_array(_glow(goal_c, 0.95, Game.COLOR_GOAL))
+		out.append_array(_soft_shadow(_cell_center(0, 0), Vector2(0.62, 0.30)))
 		out.append_array(_tile_at(1, 0, Game.COLOR_GOAL, false))
-		if with_ring:
-			out.append_array(_ring(Vector2(1.0, 0.5), 0.52, Game.COLOR_GOAL_RING))
+		out.append_array(_goal_frame(goal_c, small))
 		out.append_array(_cube(Vector2.ZERO, 0.0))
 		out.append_array(_cube(Vector2.ZERO, 1.0))
 		return out
 
-
-	func _icon_shapes() -> Array:
-		var out: Array = []
-		out.append(_shadow(Vector2(0.0, 0.10), Vector2(1.10, 0.50)))
-		out.append_array(_tile_at(1, 0, Game.COLOR_GOAL, false))
-		out.append_array(_ring(Vector2(1.0, 0.5), 0.52, Game.COLOR_GOAL_RING))
-		out.append_array(_cube(Vector2.ZERO, 0.0))
-		out.append_array(_cube(Vector2.ZERO, 1.0))
-		return out
 
 	# 特色图：6×4 棋盘碎片（含空洞）+ 躺着的骨牌 + 前方目标格。
 	# 构图取 2:1 左右的横向比例（1024×500 ≈ 2.05），所以整体能铺满而不留大片空白。
@@ -216,15 +213,16 @@ class Painter extends Control:
 		var holes: Dictionary = {"0,2": true, "3,0": true, "5,2": true, "4,3": true}
 		var goal: Vector2i = Vector2i(4, 1)
 		var domino: Array = [Vector2(0.0, 1.0), Vector2(1.0, 1.5)]   # 占 (1,1) 与 (2,1) 两格
-		out.append(_shadow(Vector2(0.5, 1.25), Vector2(1.5, 0.52)))
+		out.append_array(_soft_shadow(Vector2(0.5, 1.25), Vector2(1.5, 0.52)))
 		for gx in range(6):
 			for gz in range(4):
 				if holes.has("%d,%d" % [gx, gz]):
 					continue
 				var at := Vector2(float(gx - gz), float(gx + gz) * 0.5)
 				if gx == goal.x and gz == goal.y:
+					out.append_array(_glow(_cell_center(gx, gz), 0.85, Game.COLOR_GOAL))
 					out.append_array(_tile_at(gx, gz, Game.COLOR_GOAL, false))
-					out.append_array(_ring(at, 0.50, Game.COLOR_GOAL_RING))
+					out.append_array(_goal_frame(_cell_center(gx, gz), false))
 				else:
 					var col: Color = Game.COLOR_TILE_A if (gx + gz) % 2 == 0 else Game.COLOR_TILE_B
 					out.append_array(_tile_at(gx, gz, col))
@@ -250,26 +248,69 @@ class Painter extends Control:
 				"fill": col, "line": col.lightened(0.30), "only_line": true, "lw": OUTLINE * 0.9})
 		return out
 
-	# 目标格里的光圈：内外两个菱形叠出环（不依赖线宽，缩放稳定）
-	func _ring(center: Vector2, r: float, col: Color) -> Array:
-		var outer := PackedVector2Array([
-			center + Vector2(0, 0), center + Vector2(r, r * 0.5),
-			center + Vector2(0, r), center + Vector2(-r, r * 0.5)])
-		var mid := center + Vector2(0, r * 0.5)   # 菱形质心
-		var inner := PackedVector2Array()
-		for p in outer:
-			inner.append(mid + (p - mid) * 0.56)
+	# 格 (gx,gz) 的地面菱形中心（单位空间）。
+	# 注意 _tile_at 的原点是菱形**上角**，中心要再往下半格 —— 上一版的
+	# 光圈就是错把原点当中心，整体偏在格子左上角。
+	func _cell_center(gx: int, gz: int) -> Vector2:
+		return Vector2(float(gx - gz), float(gx + gz) * 0.5 + 0.5)
+
+	# 目标格的靶心：内嵌菱形描边 + 中心亮点。
+	# 比"挖空"的环更清楚：小到 16px 也认得出是个"目标"。
+	func _goal_frame(center: Vector2, small: bool) -> Array:
+		var col: Color = Game.COLOR_GOAL_RING.lightened(0.18)
+		var rw := 0.56
+		var rh := 0.28
+		var ring := PackedVector2Array([
+			center + Vector2(0.0, -rh), center + Vector2(rw, 0.0),
+			center + Vector2(0.0, rh), center + Vector2(-rw, 0.0)])
+		var dot := 0.15 if small else 0.19
+		var core := PackedVector2Array([
+			center + Vector2(0.0, -dot), center + Vector2(dot * 2.0, 0.0),
+			center + Vector2(0.0, dot), center + Vector2(-dot * 2.0, 0.0)])
 		return [
-			{"pts": outer, "fill": col},
-			{"pts": inner, "fill": Game.COLOR_GOAL.darkened(0.12)},
+			{"pts": ring, "fill": col, "line": col, "only_line": true, "lw": OUTLINE * 1.25},
+			{"pts": core, "fill": col},
 		]
+
+	# 椭圆（低透明度填充），阴影与光晕都由它叠出来
+	func _ellipse(center: Vector2, r: Vector2, col: Color) -> Dictionary:
+		var pts := PackedVector2Array()
+		var n := 64
+		for i in range(n):
+			var a := TAU * float(i) / float(n)
+			pts.append(center + Vector2(cos(a) * r.x, sin(a) * r.y))
+		return {"pts": pts, "fill": col}
+
+	# 接触阴影：多层椭圆叠出模糊感（越外越淡越大）。
+	# 上一版是一块单层 0.38 不透明度的扁椭圆 —— 在深色页面上就是一块灰饼。
+	func _soft_shadow(center: Vector2, r: Vector2) -> Array:
+		var out: Array = []
+		var layers := 7
+		for i in range(layers, 0, -1):
+			var t := float(i) / float(layers)          # 1 = 最外层
+			var a: float = 0.085 * pow(1.0 - t, 1.8) + 0.012
+			out.append(_ellipse(center, r * (0.70 + 0.60 * t), Color(0.02, 0.03, 0.07, a)))
+		return out
+
+	# 目标格光晕：同心椭圆叠出柔和辉光（与游戏里目标格的光效同色系）
+	func _glow(center: Vector2, r: float, col: Color) -> Array:
+		var out: Array = []
+		var layers := 9
+		for i in range(layers, 0, -1):
+			var t := float(i) / float(layers)
+			out.append(_ellipse(center,
+				Vector2(r * (0.55 + 0.75 * t), r * (0.26 + 0.38 * t)),
+				Color(col.r, col.g, col.b, 0.045 * (1.0 - t) + 0.007)))
+		return out
+
 
 	# 立方体：底面在 center（单位空间），向上叠 y_off 格。顶面亮 / +x 面中 / +z 面暗
 	func _cube(center: Vector2, y_off: float) -> Array:
 		var y0 := y_off
 		var y1 := y_off + 1.0
 		var c: Color = Game.COLOR_BLOCK
-		var e: Color = c.darkened(0.66)
+		# 描边是**同色系**的深色，不用近黑：近黑描边在小尺寸下会把三个面糊成一团
+		var e: Color = c.darkened(0.52)
 		var top := PackedVector2Array([
 			center + _p(0, y1, 0), center + _p(1, y1, 0),
 			center + _p(1, y1, 1), center + _p(0, y1, 1)])
@@ -280,16 +321,9 @@ class Painter extends Control:
 			center + _p(0, y0, 1), center + _p(1, y0, 1),
 			center + _p(1, y1, 1), center + _p(0, y1, 1)])
 		return [
-			{"pts": fz, "fill": c.darkened(0.44), "line": e, "lw": OUTLINE},
-			{"pts": fx, "fill": c.darkened(0.22), "line": e, "lw": OUTLINE},
-			{"pts": top, "fill": c.lightened(0.26), "line": e, "lw": OUTLINE},
+			{"pts": fz, "fill": c.darkened(0.38), "line": e, "lw": OUTLINE},
+			{"pts": fx, "fill": c.darkened(0.14), "line": e, "lw": OUTLINE},
+			{"pts": top, "fill": c.lightened(0.32), "line": e, "lw": OUTLINE},
 		]
 
-	# 影子：压扁的椭圆（低透明度）
-	func _shadow(center: Vector2, r: Vector2) -> Dictionary:
-		var pts := PackedVector2Array()
-		var n := 64
-		for i in range(n):
-			var a := TAU * float(i) / float(n)
-			pts.append(center + Vector2(cos(a) * r.x, sin(a) * r.y))
-		return {"pts": pts, "fill": Color(0, 0, 0, 0.38)}
+

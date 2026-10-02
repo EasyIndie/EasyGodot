@@ -41,7 +41,8 @@ func _run() -> void:
 	await _test_level_select()
 	await _test_replay_playback()
 	await _test_replay_animation()
-	await _test_touch_controls()
+	await _test_input_buffering()
+	_test_touch_controls()
 	await _test_move_animation_geometry()
 	await _test_respawn_animation()
 	await _test_swipe_hint()
@@ -251,18 +252,74 @@ func _remove_tmp(path: String) -> void:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
 
+func _first_safe_dir(g) -> Vector3i:
+	# 找"落点全部实心"的方向（不会坠落）——用它验证缓冲，免得测成坠落动画
+	for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+		if bool(g._plan_move(d)["supported"]):
+			return d
+	return Vector3i.ZERO
+
+
+func _test_input_buffering() -> void:
+	# 动画期间的输入不能被丢掉 —— 这是真机反馈"不跟手"的根因之一
+	#（滚动动画期间 try_move 直接 return false，输入静默消失）。
+	# 这里模拟"动画还没演完，玩家又滑了一下"：那一步必须在动画结束后执行。
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	await create_timer(1.8).timeout            # 等入场下落动画结束（入场期间输入走缓冲）
+	check(not scene.game.animating, "入场动画应已结束")
+	var d1: Vector3i = _first_safe_dir(scene.game)
+	check(d1 != Vector3i.ZERO, "第 1 关应至少有一个方向可走")
+	check(scene._do_move(d1), "第一步应走成")
+	await process_frame
+	check(scene.game.animating, "第一步应进入滚动动画")
+	var during: int = scene.game.move_count
+	scene._do_move(_first_safe_dir(scene.game))   # 动画期间再输入
+	check(scene._pending_move != Vector3i.ZERO, "动画期间的输入应被缓冲，而不是丢掉")
+	await create_timer(1.4).timeout
+	check(scene.game.move_count == during + 1,
+		"动画结束后缓冲的那一步必须真的执行（步数 %d → %d）" % [during, scene.game.move_count])
+	# 换关必须清空缓冲：否则界面一关会突然滚一下
+	scene._do_load(0)
+	check(scene._pending_move == Vector3i.ZERO, "换关后缓冲必须清空")
+	scene.queue_free()
+	await process_frame
+
+
+func _touch_dirs() -> Dictionary:
+	# 与游戏一致：屏幕上"走一格"的向量（40px 一格，斜 45° 等距）
+	var ex := Vector2(0.8165, 0.5774) * 40.0
+	var ez := Vector2(-0.8165, 0.5774) * 40.0
+	return {
+		Vector3i(1, 0, 0): ex, Vector3i(-1, 0, 0): -ex,
+		Vector3i(0, 0, 1): ez, Vector3i(0, 0, -1): -ez,
+	}
+
+
 func _test_touch_controls() -> void:
 	# 触屏操作层：滑动方向映射、按钮联动、不与选关/过渡打架
-	# 1) 滑动→方向：必须按**屏幕方向**映射（往哪滑、方块就往哪滚）
-	#    斜 45° 等距相机：-z 右上、+x 右下、+z 左下、-x 左上
-	check(TouchControls.swipe_dir(Vector2(80, -56)) == Vector3i(0, 0, -1), "右上滑应映射 -z")
-	check(TouchControls.swipe_dir(Vector2(80, 56)) == Vector3i(1, 0, 0), "右下滑应映射 +x")
-	check(TouchControls.swipe_dir(Vector2(-80, 56)) == Vector3i(0, 0, 1), "左下滑应映射 +z")
-	check(TouchControls.swipe_dir(Vector2(-80, -56)) == Vector3i(-1, 0, 0), "左上滑应映射 -x")
-	check(TouchControls.swipe_dir(Vector2(10, 4)) == Vector3i.ZERO, "过短位移不应算滑动")
-	# 旧行为（按网格轴映射）是错的：向上滑曾经会让方块往右上滚
-	check(TouchControls.swipe_dir(Vector2(0, -100)) != Vector3i(1, 0, 0),
-		"正上方滑动绝不能是「右下」方向（那是旧轴映射的 bug）")
+	# 1) 方向解算本身的边界（角度容错 / 歧义粘滞 / 阈值缩放）由
+	#    tests/test_gesture.gd 逐个角度断言；这里只验**接线**：
+	#    拖动经过操作层，真的发出 direction 信号，且方向正确。
+	var probe := TouchControls.new()
+	root.add_child(probe)
+	probe.set_screen_dirs(_touch_dirs())
+	var got: Array = []
+	probe.direction.connect(func(d: Vector3i) -> void: got.append(d))
+	probe.drag_begin(Vector2(400.0, 300.0))
+	probe.drag_move(Vector2(452.0, 337.0))   # 右下 ≈1.3 格
+	probe.drag_end()
+	check(got == [Vector3i(1, 0, 0)], "触屏层应把右下拖动转成 +x（实际 %s）" % str(got))
+	# 轻微移动 = 点按：不该触发移动（否则想按按钮的手会被判成滑动）
+	var got2: Array = []
+	probe.direction.connect(func(d: Vector3i) -> void: got2.append(d))
+	probe.drag_begin(Vector2(100.0, 100.0))
+	probe.drag_move(Vector2(104.0, 102.0))
+	probe.drag_end()
+	check(got2.is_empty(), "轻微移动不该触发移动（那是点按）")
+	probe.queue_free()
 
 	var scene = load("res://scenes/main.tscn").instantiate()
 	# 显式设定视口尺寸：headless 下默认窗口尺寸不可靠（get_visible_rect 可能为 0，

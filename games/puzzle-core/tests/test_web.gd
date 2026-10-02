@@ -132,6 +132,11 @@ func _test_head_include() -> void:
 	check(head.contains("favicon.png"), "应引用自制的 favicon.png")
 	check(head.contains("apple-touch-icon.png"), "应引用自制的 apple-touch-icon.png")
 	check(head.contains("-gd-engine-icon"), "应把模板生成的图标 link 改指向（双保险）")
+	# 加载层布局：模板的启动图是 position:absolute + inset:0，会**盖在标题上**
+	#（真实反馈："文字没有显示完整"）。必须把它拉回文档流并显式排序。
+	check(head.contains("position: static !important"), "启动图必须拉回文档流（否则会盖住标题）")
+	check(head.contains("order: 0") and head.contains("order: 1"), "加载层各元素必须显式排序")
+	check(head.contains("#status-splash") and head.contains("max-width: min("), "启动图尺寸必须有上限（不能被拉满整屏）")
 	# 既有功能不能被这次改动弄丢（安全区域 + 像素预算 + 诊断）
 	check(head.contains("gfSafeInsets"), "安全区域接口不能丢")
 	check(head.contains("viewport-fit"), "viewport-fit=cover 补丁不能丢")

@@ -33,62 +33,105 @@
   .gf-noscroll { position: fixed; inset: 0; }
 
   /* ── 加载画面：换成本项目自己的样式 ─────────────────────────────────────
-     默认是「Godot 的 logo + 一块 #242424 灰底」，既不是我们的品牌，也和游戏配色完全不搭。
-     这里做三件事（都不需要自定义 HTML 模板，风险最低）：
-       1) 底色换成游戏的深蓝渐变（与 boot_splash/bg_color 同色，切换时不会闪一下）
-       2) 标题 + 「正在加载…」用 CSS ::before/::after 加在 #status 上（不插 DOM、不靠 JS）
-       3) 进度条改成我们的圆角橙色条（浏览器原生样式太出戏）
-     #status 在加载完成后会被模板隐藏，所以这些装饰会一起消失，不需要额外清理。 */
+     默认是「Godot 的 logo + 灰底」，既不是我们的品牌，也和游戏配色不搭。
+     全部走 CSS（不改自定义 HTML 模板，风险最低），做四件事：
+       1) 底色换成游戏的深蓝径向渐变（与 boot_splash/bg_color 同色，切换时不闪）
+       2) 标题「滚方块」+「正在加载…」用 ::before/::after 生成（不插 DOM、不靠 JS）
+       3) 进度条改成圆角橙色条 + 一道流光
+       4) **把启动图拉回文档流并显式排序** —— 这条是必须的：
+          模板里 #status-splash 是 position:absolute + inset:0，会**盖在文字上**，
+          标题只在图的右侧露出最后一个字（真实踩过：看起来就是"文字没显示完整"）。 */
   #status {
     background: radial-gradient(120% 120% at 50% 34%, #1b2540 0%, #0b0f18 62%) !important;
     color: #cfd8ea !important;
     font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+    /* 刘海/圆角屏也不压字 */
+    padding: max(3vmin, env(safe-area-inset-top)) max(4vmin, env(safe-area-inset-right))
+             max(3vmin, env(safe-area-inset-bottom)) max(4vmin, env(safe-area-inset-left));
+  }
+  /* 垂直顺序：标记(0) → 标题(1) → 进度条(2) → 提示(3) → 错误框(4) */
+  #status-splash {
+    position: static !important;      /* 拉回文档流：absolute 会盖住标题 */
+    order: 0;
+    flex: 0 0 auto;                   /* 不许被压扁 */
+    width: auto !important;
+    height: auto !important;
+    max-width: min(40vmin, 260px) !important;
+    max-height: min(40vmin, 260px) !important;
+    margin: 0 !important;             /* 模板的 margin:auto 在文档流里会让位偏 */
+    filter: drop-shadow(0 12px 34px rgba(0, 0, 0, .38));
+    animation: gfFloat 3.8s ease-in-out infinite;
   }
   #status::before {
     content: "滚方块";
-    font-size: clamp(18px, 4.2vmin, 34px);
+    order: 1;
+    flex: 0 0 auto;
+    margin-top: min(6vmin, 40px);
+    font-size: clamp(19px, 4vmin, 32px);
     font-weight: 700;
-    letter-spacing: .22em;
-    text-indent: .22em;            /* letter-spacing 会在末字后留空隙，用缩进补回视觉居中 */
+    letter-spacing: .24em;
+    text-indent: .24em;              /* letter-spacing 会在末字后留空隙，用缩进补回视觉居中 */
     color: #eaf1ff;
-    margin-bottom: 1.6vmin;
     text-shadow: 0 2px 14px rgba(0, 0, 0, .45);
   }
-  #status::after {
-    content: "正在加载…";
-    font-size: clamp(12px, 2.1vmin, 16px);
-    letter-spacing: .16em;
-    text-indent: .16em;
-    color: #8fa3c4;
-    margin-top: 1.8vmin;
-  }
-  /* 启动标记：自身尺寸 + 上限（模板的 .fullsize--true 会把它拉满整屏） */
-  #status-splash {
-    width: auto !important;
-    height: auto !important;
-    max-width: min(44vmin, 300px) !important;
-    max-height: min(44vmin, 300px) !important;
-    filter: drop-shadow(0 18px 40px rgba(0, 0, 0, .45));
-  }
   #status-progress {
-    width: min(52vmin, 360px) !important;
-    height: 6px;
+    position: static !important;      /* 同上：模板是 absolute + bottom:10% */
+    order: 2;
+    flex: 0 0 auto;
+    margin: min(5vmin, 32px) 0 0 !important;
+    width: min(46vmin, 320px) !important;
+    height: 5px;
     -webkit-appearance: none;
     appearance: none;
     border: 0;
     border-radius: 999px;
-    background: rgba(255, 255, 255, .10);
+    background: rgba(255, 255, 255, .09);
     overflow: hidden;
   }
-  #status-progress::-webkit-progress-bar { background: rgba(255, 255, 255, .10); border-radius: 999px; }
-  #status-progress::-webkit-progress-value { background: linear-gradient(90deg, #ffc06a, #ff8a3d); border-radius: 999px; }
+  #status-progress::-webkit-progress-bar { background: rgba(255, 255, 255, .09); border-radius: 999px; }
+  #status-progress::-webkit-progress-value {
+    background: linear-gradient(90deg, #ffc06a, #ff8a3d, #ffc06a);
+    background-size: 220% 100%;
+    border-radius: 999px;
+    animation: gfShimmer 1.9s linear infinite;
+  }
   #status-progress::-moz-progress-bar { background: #ff9a4d; border-radius: 999px; }
+  #status::after {
+    content: "正在加载…";
+    order: 3;
+    flex: 0 0 auto;
+    margin-top: min(3.2vmin, 20px);
+    font-size: clamp(12px, 2vmin, 15px);
+    letter-spacing: .18em;
+    text-indent: .18em;
+    color: #8fa3c4;
+  }
   #status-notice {
+    order: 4;
     background-color: #2a1c22 !important;
     border: 1px solid #7a3546 !important;
     color: #ffd9e2 !important;
     max-width: min(80vw, 720px);
     padding: .7rem 1rem;
+  }
+  @keyframes gfFloat {
+    0%, 100% { transform: translateY(-1.2%); }
+    50%      { transform: translateY(1.2%); }
+  }
+  @keyframes gfShimmer {
+    from { background-position: 0 0; }
+    to   { background-position: -220% 0; }
+  }
+  /* 屏幕很矮时（横屏手机 / 小窗）压掉留白，保证四行都放得下、不被裁 */
+  @media (max-height: 460px) {
+    #status-splash { max-width: min(26vmin, 150px) !important; max-height: min(26vmin, 150px) !important; }
+    #status::before { margin-top: min(3.5vmin, 18px); font-size: clamp(16px, 3.4vmin, 24px); }
+    #status-progress { margin-top: min(3vmin, 16px) !important; width: min(38vmin, 240px) !important; }
+    #status::after { margin-top: min(2vmin, 12px); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #status-splash { animation: none; }
+    #status-progress::-webkit-progress-value { animation: none; }
   }
 </style>
 <!-- 网页图标：用专门画的小图标（项目图标是 1024²，缩到 16px 会糊成一团）。

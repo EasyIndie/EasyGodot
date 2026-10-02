@@ -56,24 +56,10 @@ const DEFAULT_SCREEN_DIRS := {
 }
 
 
-static func best_dir(swipe: Vector2, screen_dirs: Dictionary) -> Vector3i:
-	# 把滑动方向映射到**屏幕上最接近**的网格方向（与相机取景一致）。
-	# 完全竖直/水平的滑动会落在两个方向的正中间（平局），此时按字典插入顺序取第一个，
-	# 保证同一手势结果稳定；玩家只要斜一点滑就能精确指向。
-	if swipe.length() < 0.0001:
-		return Vector3i.ZERO
-	var s: Vector2 = swipe.normalized()
-	var best: Vector3i = Vector3i.ZERO
-	var best_score: float = -2.0
-	for d in screen_dirs.keys():
-		var v: Vector2 = screen_dirs[d]
-		if v.length() < 0.0001:
-			continue
-		var score: float = s.dot(v.normalized())
-		if score > best_score + 0.000001:
-			best_score = score
-			best = d
-	return best
+# 方向解算（滑动 → 网格方向）已统一到 meta/gesture.gd：
+# 那里是"解到棋盘坐标系 + 歧义粘滞"，比这里"取屏幕上最近的方向"更能容错。
+# 两处各留一份实现迟早会走偏，所以这里不再保留副本。
+# DEFAULT_SCREEN_DIRS 仅作手势层在相机就绪前的兜底。
 
 
 # ── 安全区域（刘海 / 灵动岛 / 底部手势条）────────────────────────────────

@@ -94,6 +94,7 @@ var _ghost_busy: bool = false
 var _ghost_moves: int = 0          # 幽灵已经滚了几步（测试按它给帧分组，见 ghost_move_index）
 var move_count: int = 0
 var _tween: Tween = null
+var _spawn_tween: Tween = null   # 入场下落动画（唯一允许被玩家输入打断的动画）
 
 
 func load_level(path: String) -> bool:
@@ -446,6 +447,29 @@ func _kill_tween() -> void:
 	if _tween != null and _tween.is_valid():
 		_tween.kill()
 	_tween = null
+	if _spawn_tween != null and _spawn_tween.is_valid():
+		_spawn_tween.kill()
+	_spawn_tween = null
+
+
+func snap_spawn() -> bool:
+	# 立即结束**入场下落**动画并补到终态，返回是否真的打断了。
+	#
+	# 为什么需要：入场动画有 1 秒多，如果这段时间玩家的输入只能排队等，
+	# 每次进关卡的第一下都会"慢半拍"。入场下落纯粹是观赏性的（方块从上方落下），
+	# 逻辑状态（state/board）在 play_spawn 之前就已经确定了，
+	# 所以这里只补视觉，不会造成"逻辑与画面不一致"。
+	# **只允许打断入场**：滚动动画被打断会让方块停在半路，没法收拾。
+	if _spawn_tween == null or not _spawn_tween.is_valid():
+		return false
+	_spawn_tween.kill()
+	_spawn_tween = null
+	if block != null:
+		block.position.y = 0.0
+	if _block_pivot != null:
+		_block_pivot.scale = Vector3.ONE
+	animating = false
+	return true
 
 
 # ── 渲染 ────────────────────────────────────────────────
@@ -977,12 +1001,14 @@ func play_spawn() -> void:
 	# 早期用的是 TRANS_BOUNCE，弹得像橡胶球；方块是刚体，下落应该是加速的（重力曲线），
 	# 触地后只弹一点点就停 —— 重量感来自“停得住”，而不是“弹得高”。
 	var tw := create_tween()
+	_spawn_tween = tw
 	tw.tween_property(block, "position:y", 0.0, SPAWN_TIME) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.tween_method(_squash_curve, 0.0, 1.0, 0.24)                       # 触地这一瞬间
 	tw.parallel().tween_property(block, "position:y", 0.10, 0.08).set_trans(Tween.TRANS_SINE)
 	tw.tween_property(block, "position:y", 0.0, 0.10).set_trans(Tween.TRANS_SINE)
 	tw.finished.connect(func() -> void:
+		_spawn_tween = null
 		if _block_pivot != null:
 			_block_pivot.scale = Vector3.ONE
 		animating = false)
