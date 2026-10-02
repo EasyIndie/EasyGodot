@@ -9,16 +9,14 @@
 extends RefCounted
 
 var flags: Dictionary = {}    # {机关 id: bool}  开关/桥的开合、闸门的状态
-var broken: Dictionary = {}   # {"x,z": true}    已碎裂的格子
 
 
-func _init(p_flags: Dictionary = {}, p_broken: Dictionary = {}) -> void:
+func _init(p_flags: Dictionary = {}) -> void:
 	flags = p_flags.duplicate()
-	broken = p_broken.duplicate()
 
 
 func duplicate():
-	return get_script().new(flags, broken)
+	return get_script().new(flags)
 
 
 func flag(id: String) -> bool:
@@ -31,18 +29,8 @@ func with_flag(id: String, on: bool):
 	return n
 
 
-func is_broken(cell) -> bool:
-	return broken.has("%d,%d" % [cell.x, cell.z])
-
-
-func with_broken(cell):
-	var n = duplicate()
-	n.broken["%d,%d" % [cell.x, cell.z]] = true
-	return n
-
-
 func is_empty() -> bool:
-	return flags.is_empty() and broken.is_empty()
+	return flags.is_empty()
 
 
 func key() -> String:
@@ -52,9 +40,4 @@ func key() -> String:
 	var s := ""
 	for k in ks:
 		s += "%s=%d;" % [k, 1 if bool(flags[k]) else 0]
-	var bs: Array = broken.keys()
-	bs.sort()
-	s += "|"
-	for b in bs:
-		s += b + ";"
 	return s

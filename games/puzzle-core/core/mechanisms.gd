@@ -9,12 +9,16 @@
 #   bridge  : 桥。开 = 实心可站；关 = 空洞（但有「幽灵框」提示将来会有路）
 #   gate    : 闸门。开 = 变成空洞（封路）；关 = 实心。与 bridge 相反，同一个机制两种参数
 #   portal  : 传送门。进入其中一格 → 出现在配对格，姿态不变（姿态约束）
-#   fragile : 碎裂砖。方块**离开**该格时碎掉（变空洞）→ 单向路径
+#
+# 曾经实现过 fragile（碎裂砖：离开即碎 → 单向路径），**已整体删除**。
+# 理由（不是"没时间做"，而是它过不了本项目的硬规则）：把碎裂砖换成普通实心格后，
+# 最优解**一模一样** —— 最优玩家本来就不会走回头路，所以它只是惩罚乱走，
+# 不制造任何必须推理的约束。详见 workflow/docs/10-level-mechanics.md §7.4。
 extends RefCounted
 
 const MechState = preload("res://core/mech_state.gd")
 
-const KINDS: Array = ["switch", "bridge", "gate", "portal", "fragile"]
+const KINDS: Array = ["switch", "bridge", "gate", "portal"]
 
 # 需要「先用开关打开才能站」的 kind（初始关闭）
 const CLOSED_BY_DEFAULT: Array = ["bridge"]
@@ -79,7 +83,7 @@ static func tiles_of(defs: Array, kind: String) -> Array:
 # ── 规则 ─────────────────────────────────────────────
 
 static func _on_tile(defs: Array, cell) -> Array:
-	# 该格上挂着哪些机关（可能有多个：例如碎裂砖同时是开关）
+	# 该格上挂着哪些机关（同一格可以挂多个，例如某块瓦片上既有开关又有桥）
 	var out: Array = []
 	for d in defs:
 		var kind: String = str(d["kind"])
@@ -95,10 +99,10 @@ static func is_solid(board, defs: Array, mech, cell) -> bool:
 	# 「这一格现在有没有地面」的**唯一**判定（机关版）。
 	#
 	# 判定顺序不是随意的，这里踩过一次真 bug：
-	#   **补地类机关（bridge / fragile）必须早于「静态空洞」判定** ——
+	#   **补地类机关（bridge）必须早于「静态空洞」判定** ——
 	#   桥的全部意义就是"架在空洞上补出一条路"，先判空洞就直接返回 false，
 	#   于是桥永远不可能存在（表现为：机关明明开着，方块就是过不去，且毫无报错）。
-	# 顺序：界内 → 补地类（桥/碎裂砖）→ 静态空洞 → 已碎 → 拆地类（闸门）→ 默认有地。
+	# 顺序：界内 → 补地类（桥）→ 静态空洞 → 拆地类（闸门）→ 默认有地。
 	if not board.is_inside(cell):
 		return false
 	for d in _on_tile(defs, cell):
@@ -106,13 +110,7 @@ static func is_solid(board, defs: Array, mech, cell) -> bool:
 		if kind == "bridge":
 			# 桥：开 = 可站（哪怕下面是空洞）；关 = 空洞
 			return _is_open(defs, mech, str(d["id"]))
-		if kind == "fragile":
-			# 碎裂砖本身是地面（它碎掉之后才是空洞）——所以它可以架在空洞上，
-			# 也就是"会碎的临时踏脚石"
-			return not (mech != null and mech.is_broken(cell))
 	if board.is_void(cell):
-		return false
-	if mech != null and mech.is_broken(cell):
 		return false
 	for d in _on_tile(defs, cell):
 		if str(d["kind"]) == "gate":
@@ -134,11 +132,9 @@ static func supports(board, defs: Array, mech, world_cells: Array) -> bool:
 	return true
 
 
-static func on_enter(board, defs: Array, mech, world_cells: Array, left_cells: Array = []):
+static func on_enter(board, defs: Array, mech, world_cells: Array):
 	# 方块落到 world_cells 之后发生的机关效果，返回新的 MechState（**不原地修改**）。
-	# 两类效果：
-	#   1) 踩到开关 → 翻转 / 锁定它控制的目标
-	#   2) 离开碎裂砖 → 那些格子碎掉（站上去不碎，否则没法玩）
+	# 效果：踩到开关 → 翻转 / 锁定它控制的目标
 	var cur = mech
 	if cur == null:
 		cur = MechState.new()
@@ -161,14 +157,6 @@ static func on_enter(board, defs: Array, mech, world_cells: Array, left_cells: A
 				# 这是刻意的：玩家必须记住自己按过几次（这也是这个机制的推理点之一）。
 				cur = cur.with_flag(target, not cur.flag(target))
 
-	# ② 碎裂砖：只碎「刚离开」的格子（且不再被占用）
-	var occupied: Array = footprint_of(world_cells)
-	for cell in left_cells:
-		if occupied.has(Vector2i(cell.x, cell.z)):
-			continue   # 这一格还在方块身下 → 不碎
-		for d in _on_tile(defs, cell):
-			if str(d["kind"]) == "fragile":
-				cur = cur.with_broken(cell)
 	return cur
 
 
@@ -214,7 +202,7 @@ static func footprint_of(world_cells: Array) -> Array:
 static func roles_of(defs: Array) -> Dictionary:
 	# {"x,z": kind}，供渲染层查每一格是什么机关（同格多机关时取**更“拦路”的那个**）
 	var out: Dictionary = {}
-	var priority: Array = ["bridge", "gate", "portal", "fragile", "switch"]
+	var priority: Array = ["bridge", "gate", "portal", "switch"]
 	for d in defs:
 		var kind: String = str(d["kind"])
 		var pool: Array = d["tiles"] if kind != "portal" else d["links"]

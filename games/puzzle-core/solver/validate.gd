@@ -83,24 +83,15 @@ static func validate_dict(data: Dictionary) -> Dictionary:
 
 
 static func _control_board(board):
-	# 构造「对照盘」：用来判断机关到底承不承重。
-	# **必须按机关类型分别对照**，否则会得出错误结论：
-	#   bridge/gate/portal：去掉机关 → 那些格子回到"纯空洞"（桥/传送门消失）
-	#   fragile          ：把碎裂砖换成**普通实心格**（"如果能反复走会不会更短"）
-	#                        —— 直接删掉 fragile 会把它变成空洞，那是另一个问题（路没了），
-	#                        测不出"碎裂"这个性质本身有没有用。
-	var fragile_tiles: Array = Mechanisms.tiles_of(board.mechanisms, "fragile")
-	var holes: Array = board.holes.duplicate()
-	for t in fragile_tiles:
-		holes.erase(t)   # 碎裂砖下面的格子变回实心（它们本来就是地面）
-	# 对照盘**不带任何机关**（这里曾经写反过：把非 fragile 的机关留了下来 →
-	# 对照盘其实带机关，于是"去掉机关后仍可解"永远成立，所有机关都被误报成装饰品）
-	return Board.new(board.id, board.grid_x, board.grid_z, holes, board.goal, [])
+	# 「对照盘」：用来判断机关到底承不承重 —— 把机关**全部去掉**
+	# （桥/闸门/传送门都消失，那些格子回到纯空洞）。
+	# 陷阱：曾经在这里把"非 fragile 的机关"留了下来 → 对照盘其实带机关，
+	# 于是"去掉机关后仍可解"永远成立，**所有机关都被误报成装饰品**。判据本身也要测。
+	return Board.new(board.id, board.grid_x, board.grid_z, board.holes, board.goal, [])
 
 
 static func _control_desc(board) -> String:
-	return "把碎裂砖换成普通实心格" if not Mechanisms.tiles_of(board.mechanisms, "fragile").is_empty() \
-		else "去掉机关"
+	return "去掉机关"
 
 
 static func _check_mechanisms(board, errors: Array, warnings: Array) -> void:

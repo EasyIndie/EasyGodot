@@ -45,7 +45,7 @@ static func apply_step(p_board, p_state, mech, d: Vector3i):
 	# 机关的三个时机都在这里，顺序不能乱：
 	#   ① 用**移动前**的机关状态判断能不能落过去（桥还没开就是过不去）
 	#   ② 传送（姿态不变）
-	#   ③ 落点上的开关生效 / 刚离开的碎裂砖碎掉
+	#   ③ 落点上的开关生效
 	var defs: Array = p_board.mechanisms
 	var r: Dictionary = Moves.roll_delta(p_state.shape, p_state.orientation, d)
 	var new_pos: Vector3i = p_state.position + r["delta"]
@@ -53,7 +53,6 @@ static func apply_step(p_board, p_state, mech, d: Vector3i):
 	if not Mech.supports(p_board, defs, mech, to_cells):
 		return null
 	var nxt = State.new(p_state.shape, r["orientation"], new_pos)
-	var left_cells: Array = p_state.world_cells()
 	var m = mech
 	# ② 传送：进到传送格就换位置（姿态不变）。落点如果站不住 → 一样是坠落。
 	if not defs.is_empty():
@@ -62,8 +61,8 @@ static func apply_step(p_board, p_state, mech, d: Vector3i):
 			nxt = tp["state"]
 			if not Mech.supports(p_board, defs, m, nxt.world_cells()):
 				return {"state": nxt, "mech": m, "fall": true}
-		# ③ 机关效果（开关 / 碎裂）
-		m = Mech.on_enter(p_board, defs, m, nxt.world_cells(), left_cells)
+		# ③ 机关效果（开关）
+		m = Mech.on_enter(p_board, defs, m, nxt.world_cells())
 	var fall: bool = not Mech.supports(p_board, defs, m, nxt.world_cells())
 	return {"state": nxt, "mech": m, "fall": fall}
 

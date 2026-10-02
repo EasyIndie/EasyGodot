@@ -41,7 +41,7 @@ func is_hole(cell: Vector3i) -> bool:
 
 func is_solid(cell: Vector3i) -> bool:
 	# **静态地形**的判定：在棋盘内 且 不是空洞。
-	# 带机关的关卡请走 Mechanisms.supports()（它在此基础上再算桥/闸门/碎裂）——
+	# 带机关的关卡请走 Mechanisms.supports()（它在此基础上再算桥与闸门）——
 	# 两处判定必须只有一份真相，所以这里不掺机关逻辑：
 	# board 只回答「这块地在关卡定义里是不是空的」，动态部分由 MechState 决定。
 	return is_inside(cell) and not is_void(cell)

@@ -59,6 +59,18 @@ const SPECS: Array = [
 	{"grid_x": 12, "grid_z": 12, "holes": 0.25, "min_moves": 15, "difficulty": "hard"},   # 20 终章：最密空洞
 ]
 
+# ── 机关章节（用户 2026-10 决定：机关**混合进 20 关**，不另开一章）──────────
+#   13–15 关：传送门（姿态约束入门）
+#   16–18 关：开关 + 桥（顺序推理：先开路才能过）
+#   19–20 关：两者混用
+# 关键：机关位置**不是设计出来的，是扫出来的**（手推几何极易写出"不可解"或"机关是装饰品"
+# 的关卡，本轮手推的候选全被自动化工具否掉）。扫描的准入条件只有两条：
+#   ① 质检通过且**机关承重**（去掉机关后不可解 / 更慢 —— 见 solver/validate.gd）
+#   ② 步数落在该关的目标附近（不破坏难度曲线）
+const MECH_FROM_INDEX: int = 13
+const MECH_TRIES: int = 26        # 每关尝试的机关位置数上限（决定生成耗时）
+const MECH_BASE_SLACK: int = 3    # 机关关的基础盘面比目标多这么多步（机关会把它缩短回来）
+
 # 「命中」容差：实际步数偏离搜索目标不超过这么多就算命中
 const MOVE_TOLERANCE: int = 2
 # 曲线单调校验容差：步数曲线允许的极小回落（盘面面积不允许回落）
@@ -115,6 +127,7 @@ func _init() -> void:
 			"area": int(spec["grid_x"]) * int(spec["grid_z"]),
 			"holes": float(spec["holes"]),
 			"min_moves": int(spec["min_moves"]),
+			"mech": str(picked.get("mech", "")),
 			"met": picked["met"],
 			"written": true,
 			"reload_ok": usable,
@@ -162,24 +175,161 @@ func _check_curve(reports: Array) -> Dictionary:
 # 超额命中的结果会变成下一关的下限，误差逐关累积（第 20 关曾要求 30+ 步而生成不出来）。
 func _pick(spec: Dictionary, base_seed: int, idx: int) -> Dictionary:
 	var want: int = int(spec["min_moves"])
+	# 机关关：基础盘面按「目标 + 余量」生成 —— 挂上机关后最优解会缩短，
+	# 直接按目标生成的话，一挂机关就掉到曲线下面去了（实测第 13 关掉到 7 步）。
+	var want_gen: int = want + (MECH_BASE_SLACK if idx >= MECH_FROM_INDEX else 0)
 	var best := {}
 	var best_score: float = INF
 	for attempt in range(SEED_TRIES):
 		var seed: int = base_seed + idx * 1000 + attempt
-		var r: Dictionary = _gen_one(spec, spec["difficulty"], seed)
+		var gen_spec: Dictionary = spec
+		if want_gen != want:
+			gen_spec = spec.duplicate()
+			gen_spec["min_moves"] = want_gen
+		var r: Dictionary = _gen_one(gen_spec, spec["difficulty"], seed)
 		if r.is_empty():
-			r = _gen_one(spec, "any", seed)
+			r = _gen_one(gen_spec, "any", seed)
 		if r.is_empty():
 			continue
 		var om: int = int(r["detail"]["optimal_moves"])
 		# 打分：达到目标就给差距本身；没达到目标额外罚 0.5（尽量别低于目标）
 		var score: float = float(om - want) if om >= want else float(want - om) + 0.5
+		# 机关关（13 关起）：base 候选必须能挂上一组**承重**的机关才算数
+		if idx >= MECH_FROM_INDEX:
+			var with_mech: Dictionary = _attach_mechanism(r["level"], idx, want, seed)
+			if with_mech.is_empty():
+				continue
+			r = {
+				"level": with_mech["level"],
+				"detail": with_mech["detail"],
+				"mech": with_mech["desc"],
+			}
 		if score < best_score:
 			best = r
 			best_score = score
 	if best.is_empty():
 		return {}
 	best["met"] = best_score <= float(MOVE_TOLERANCE)
+	return best
+
+
+func _mech_plan(idx: int) -> Array:
+	# 该关允许出现的机关种类（越靠后越多）
+	if idx < MECH_FROM_INDEX:
+		return []
+	if idx <= 15:
+		return ["portal"]
+	if idx <= 18:
+		# 桥要优先尝试：它是"顺序推理"的主力，但可用的承重位置比传送门少
+		return ["bridge", "bridge", "bridge", "portal"]
+	return ["bridge", "bridge", "portal"]
+
+
+func _hole_cells(lv: Dictionary) -> Array:
+	var out: Array = []
+	for h in lv.get("holes", []):
+		out.append(Vector2i(int(h[0]), int(h[1])))
+	return out
+
+
+func _solid_cells(lv: Dictionary) -> Array:
+	var g: Dictionary = lv.get("grid", {"x": 8, "z": 8})
+	var holes: Dictionary = {}
+	for h in _hole_cells(lv):
+		holes[h] = true
+	var out: Array = []
+	for x in range(int(g["x"])):
+		for z in range(int(g["z"])):
+			if not holes.has(Vector2i(x, z)):
+				out.append(Vector2i(x, z))
+	return out
+
+
+func _attach_mechanism(lv: Dictionary, idx: int, want: int, seed: int) -> Dictionary:
+	# 为这一关找一组**承重**的机关位置。返回 {"level": 带机关的关卡, "desc": 说明} 或 {}。
+	var kinds: Array = _mech_plan(idx)
+	if kinds.is_empty():
+		return {}
+	var holes: Array = _hole_cells(lv)
+	var solids: Array = _solid_cells(lv)
+	if holes.is_empty() or solids.size() < 4:
+		return {}
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed
+	# 候选位置：桥要架在**空洞**上（它存在的意义就是补地）；开关/传送门放在实心格上
+	var solid_set: Dictionary = {}
+	for c in solids:
+		solid_set[c] = true
+	var bridge_cands: Array = []
+	for h in holes:
+		# 只考虑"周围实心格较多"的空洞：填上它才可能真正连出一条路。
+		# 一个孤零零的空洞填上通常改变不了任何东西（质检会判成装饰品）。
+		var nb: int = 0
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if solid_set.has(h + d):
+				nb += 1
+		if nb < 3:
+			continue
+		bridge_cands.append([h])
+		for d in [Vector2i(1, 0), Vector2i(0, 1)]:
+			if solid_set.has(h + d):
+				bridge_cands.append([h, h + d])
+	var best := {}
+	var best_score: float = INF
+	var tries: int = 0
+	for _t in range(MECH_TRIES):
+		if tries >= MECH_TRIES:
+			break
+		tries += 1
+		var kind: String = kinds[tries % kinds.size()]
+		var defs: Array = []
+		var desc: String = ""
+		if kind == "portal" and solids.size() >= 6:
+			var a: Vector2i = solids[rng.randi_range(0, solids.size() - 1)]
+			var b: Vector2i = solids[rng.randi_range(0, solids.size() - 1)]
+			if a == b or (absi(a.x - b.x) + absi(a.y - b.y)) < 4:
+				continue
+			defs = [{"id": "p1", "kind": "portal", "links": [[a.x, a.y], [b.x, b.y]]}]
+			desc = "传送门 %s↔%s" % [str(a), str(b)]
+		elif kind == "bridge" and not bridge_cands.is_empty():
+			var tiles: Array = bridge_cands[rng.randi_range(0, bridge_cands.size() - 1)]
+			# 桥格必须在棋盘内，且桥不能把整条孔洞填平（否则等于没洞）
+			var ok_tiles := true
+			var tarr: Array = []
+			for t in tiles:
+				if t.x < 0 or t.y < 0:
+					ok_tiles = false
+				else:
+					tarr.append([t.x, t.y])
+			if not ok_tiles:
+				continue
+			var sw: Vector2i = solids[rng.randi_range(0, solids.size() - 1)]
+			defs = [
+				{"id": "sw1", "kind": "switch", "tiles": [[sw.x, sw.y]], "target": "br1", "mode": "latch"},
+				{"id": "br1", "kind": "bridge", "tiles": tarr},
+			]
+			desc = "开关 %s → 桥 %s" % [str(sw), str(tarr)]
+		else:
+			continue
+		var cand: Dictionary = lv.duplicate(true)
+		cand["mechanisms"] = defs
+		var rep: Dictionary = Validate.validate_dict(cand)
+		if str(rep["status"]) != "valid":
+			continue
+		var warns: String = str(rep.get("warnings", []))
+		if warns.contains("decorative") or warns.contains("hurt"):
+			continue          # 机关不承重 → 直接丢弃（这就是"好不好玩"的自动过滤器）
+		var om: int = int(rep["optimal_moves"])
+		# 机关会**缩短**最优解（它就是条捷径），所以这里要求"不能比目标更简单"：
+		# 只允许略短 1 步，长则按 MOVE_TOLERANCE 容差。
+		if om < want - 1 or om > want + MOVE_TOLERANCE:
+			continue
+		var score: float = absf(float(om - want))
+		if score < best_score:
+			best = {"level": cand, "desc": desc, "detail": rep, "om": om}
+			best_score = score
+		if best_score <= 0.0:
+			break
 	return best
 
 

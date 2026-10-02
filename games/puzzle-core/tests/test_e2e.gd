@@ -614,35 +614,53 @@ func _test_mobile_back() -> void:
 
 func _test_mechanism_render() -> void:
 	# 机关必须**看得见**，否则等于没做：桥关着时要有"幽灵框"提示，踩开关后要变成实心。
+	# 这里刻意**不依赖某一关的具体解法**（关卡集会随曲线重生成）：
+	# 用求解器解出来、逐步复演，检查机关外观是否跟着状态变化。
 	var tmp := "user://test_e2e_mech.json"
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(tmp))
 	ProjectSettings.set_setting("puzzle/progress_path", tmp)
 	var game = Game.new()
 	game.animate = false
 	root.add_child(game)
-	var lv: Dictionary = Loader.load_file("res://levels/level_21.json")
+	# 找一关带桥的机关关（level_18 是"开关 + 桥"）
+	var lv: Dictionary = Loader.load_file("res://levels/level_18.json")
 	check(not lv.has("error"), "机关关应能加载")
 	check(game.load_dict(lv), "机关关应能载入视觉层")
 
 	# 静态地形数不变（机关"补地"不算地形）
 	var tiles: int = game.board.grid_x * game.board.grid_z - game.board.holes.size()
 	check(game.tile_count() == tiles, "机关关的静态地形瓦片数应正确（%d vs %d）" % [game.tile_count(), tiles])
-	check(game.bridge_ghost_count() == 2, "桥关闭时应有两个幽灵框（实际 %d）" % game.bridge_ghost_count())
-	check(game.mech_tile_count() > 0, "机关格上应有瓦片（开关/桥）")
 
-	var closed_tiles: Array = game._mech_tiles.get("3,3", [])
+	var bridge: Dictionary = {}
+	for d in game.board.mechanisms:
+		if str(d["kind"]) == "bridge":
+			bridge = d
+	check(not bridge.is_empty(), "level_18 应有桥")
+	if bridge.is_empty():
+		game.free()
+		return
+	var first: Vector2i = bridge["tiles"][0]
+	var key := "%d,%d" % [first.x, first.y]
+	check(game.bridge_ghost_count() == bridge["tiles"].size(),
+		"桥关闭时应为每个桥格画幽灵框（%d vs %d）" % [game.bridge_ghost_count(), bridge["tiles"].size()])
 	var visible_when_closed := false
-	for m in closed_tiles:
+	for m in game._mech_tiles.get(key, []):
 		if (m as MeshInstance3D).visible:
 			visible_when_closed = true
 	check(not visible_when_closed, "桥关着时不该出现实心瓦片（只有幽灵框）")
 
-	# 踩开关（第 21 关的第一步是 backward）→ 桥出现
-	var ok: bool = game.try_move(Vector3i(0, 0, -1))
-	check(ok, "踩开关那一步应成立")
-	check(game.mech != null and game.mech.flag("br1"), "踩过开关后桥应在状态里打开")
+	# 沿最优解复演：桥一旦打开，瓦片必须立刻变实心、幽灵框收起
+	var sol: Dictionary = Solver.new(game.board, game.state).solve()
+	check(bool(sol["solvable"]), "机关关应可解")
+	var opened := false
+	for label in sol.get("solution", []):
+		game.try_move(Moves.direction_from_label(str(label)))
+		if game.mech != null and game.mech.flag(str(bridge["id"])):
+			opened = true
+			break
+	check(opened, "最优解里应该会打开桥（否则机关是装饰品）")
 	var visible_when_open := true
-	for m in game._mech_tiles.get("3,3", []):
+	for m in game._mech_tiles.get(key, []):
 		if (m as MeshInstance3D).visible == false:
 			visible_when_open = false
 	check(visible_when_open, "桥打开后桥格应显示实心瓦片")

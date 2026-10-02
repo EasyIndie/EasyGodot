@@ -38,7 +38,6 @@ const COLOR_GOAL_RING := Color(0.35, 1.00, 0.70) # 目标“光圈”（嵌在�
 const COLOR_SWITCH := Color(1.00, 0.78, 0.30)      # 开关（琥珀）
 const COLOR_SWITCH_ON := Color(1.00, 0.95, 0.55)   # 开关被压住（更亮）
 const COLOR_BRIDGE_ON := Color(0.30, 0.85, 0.92)   # 桥（开）
-const COLOR_FRAGILE := Color(0.72, 0.72, 0.78)     # 碎裂砖
 const COLOR_PORTAL_A := Color(0.72, 0.45, 1.00)    # 传送门 A（紫）
 const COLOR_PORTAL_B := Color(0.35, 0.95, 0.85)    # 传送门 B（青）
 
@@ -64,7 +63,6 @@ var _tile_mat_goal: ShaderMaterial = null
 var _tile_mat_switch: ShaderMaterial = null
 var _tile_mat_bridge_on: ShaderMaterial = null
 var _tile_mat_bridge_off: ShaderMaterial = null
-var _tile_mat_fragile: ShaderMaterial = null
 var _tile_mat_portal_a: ShaderMaterial = null
 var _tile_mat_portal_b: ShaderMaterial = null
 var _tile_mat_bridge_ghost: ShaderMaterial = null
@@ -462,7 +460,6 @@ func _build_board() -> void:
 	_tile_mat_switch = _make_tile_material(COLOR_SWITCH, 0.12)
 	_tile_mat_bridge_on = _make_tile_material(COLOR_BRIDGE_ON, 0.10)
 	_tile_mat_bridge_off = _make_tile_material(Color(COLOR_BRIDGE_ON.r, COLOR_BRIDGE_ON.g, COLOR_BRIDGE_ON.b, 0.35), 0.0)
-	_tile_mat_fragile = _make_tile_material(COLOR_FRAGILE)
 	_tile_mat_portal_a = _make_tile_material(COLOR_PORTAL_A, 0.35)
 	_tile_mat_portal_b = _make_tile_material(COLOR_PORTAL_B, 0.35)
 	_tile_mat_bridge_ghost = _make_tile_material(Color(COLOR_BRIDGE_ON.r, COLOR_BRIDGE_ON.g, COLOR_BRIDGE_ON.b, 0.22), 0.0)
@@ -482,9 +479,9 @@ func _build_board() -> void:
 				ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				board_root.add_child(ghost)
 				_bridge_ghosts["%d,%d" % [x, z]] = ghost
-			if board.is_void(Vector3i(x, 0, z)) and role != "bridge" and role != "fragile":
+			if board.is_void(Vector3i(x, 0, z)) and role != "bridge":
 				# 空洞 = 地面缺失：直接不画地面（透出背景），就是一块“空的洞”。
-				# 例外：桥/碎裂砖是"补地类"机关，它们本身就架在空洞上（见 mechanisms.gd 的说明）。
+				# 例外：桥是"补地类"机关，它本身就架在空洞上（见 mechanisms.gd 的说明）。
 				continue
 			var is_goal: bool = board.goal.has(v2)
 			var mat: ShaderMaterial = _tile_mat_goal if is_goal else (
@@ -494,8 +491,6 @@ func _build_board() -> void:
 					mat = _tile_mat_switch
 				"bridge":
 					mat = _tile_mat_bridge_on if _is_bridge_open(x, z) else _tile_mat_bridge_off
-				"fragile":
-					mat = _tile_mat_fragile
 				"portal":
 					mat = _tile_mat_portal_a if _portal_group(x, z) == 0 else _tile_mat_portal_b
 			var m := _make_box(Vector3(0.94, 0.2, 0.94), mat)
@@ -574,9 +569,6 @@ func refresh_mechanisms() -> void:
 					var open: bool = _is_bridge_open(x, z)
 					m.visible = open
 					m.material_override = _tile_mat_bridge_on if open else _tile_mat_bridge_off
-				"fragile":
-					var broken: bool = mech.is_broken(Vector3i(x, 0, z))
-					m.visible = not broken
 				"portal":
 					m.material_override = _tile_mat_portal_a if _portal_group(x, z) == 0 else _tile_mat_portal_b
 	# 桥的幽灵框：桥开着时收起（真瓦片已经在那个位置）

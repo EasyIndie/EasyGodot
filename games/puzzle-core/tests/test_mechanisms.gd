@@ -23,7 +23,6 @@ var failures: int = 0
 func _init() -> void:
 	_test_mech_state()
 	_test_solid_rules()
-	_test_fragile()
 	_test_portal()
 	_test_switch_bridge_level()
 	_test_portal_level()
@@ -72,7 +71,7 @@ func _domino(o: int, pos: Vector3i):
 func _test_mech_state() -> void:
 	var m = MechState.new()
 	check(m.is_empty(), "空机关状态")
-	check(m.key() == "|", "空状态的键稳定（%s）" % m.key())
+	check(m.key() == "", "空状态的键稳定（实际 %s）" % m.key())
 
 	var a = m.with_flag("b1", true)
 	check(not m.flag("b1"), "值语义：修改返回新对象，原对象不变")
@@ -80,15 +79,10 @@ func _test_mech_state() -> void:
 	check(a.key() != m.key(), "开关状态必须体现在键里")
 
 	# 键的顺序必须与插入顺序无关（BFS 去重全靠这个）
-	var k1 = MechState.new({"b": true, "a": true}, {}).key()
-	var k2 = MechState.new({"a": true, "b": true}, {}).key()
+	var k1 = MechState.new({"b": true, "a": true}).key()
+	var k2 = MechState.new({"a": true, "b": true}).key()
 	check(k1 == k2, "键与字典插入顺序无关（%s vs %s）" % [k1, k2])
 
-	var br = m.with_broken(Vector3i(3, 0, 4))
-	check(br.is_broken(Vector3i(3, 0, 4)), "碎裂格应被记住")
-	check(not br.is_broken(Vector3i(4, 0, 4)), "其他格不受影响")
-	check(br.key() != m.key(), "碎裂状态必须体现在键里")
-	check(not m.is_broken(Vector3i(3, 0, 4)), "值语义：原对象不受影响")
 
 
 func _test_solid_rules() -> void:
@@ -118,33 +112,6 @@ func _test_solid_rules() -> void:
 	check(not Mech.is_solid(b3, d3, null, Vector3i(1, 0, 1)), "洞上的桥关着时仍是空洞")
 	check(Mech.is_solid(b3, d3, MechState.new({"br1": true}), Vector3i(1, 0, 1)),
 		"洞上的桥打开后必须有地面（桥的意义）")
-	# 碎裂砖同样可以架在空洞上（会碎的临时踏脚石）
-	var b4 = _setup(4, 4, [[1, 1]], [[3, 3]], [{"id": "f1", "kind": "fragile", "tiles": [[1, 1]]}])
-	check(Mech.is_solid(b4, b4.mechanisms, null, Vector3i(1, 0, 1)), "洞上的碎裂砖是地面")
-	check(not Mech.is_solid(b4, b4.mechanisms, MechState.new({}, {"1,1": true}), Vector3i(1, 0, 1)),
-		"碎掉之后才变空洞")
-
-
-func _test_fragile() -> void:
-	# 碎裂砖：站上去不碎，**离开**才碎
-	_setup(6, 6, [], [[5, 5]], [{"id": "f1", "kind": "fragile", "tiles": [[1, 1]]}])
-	var defs: Array = _b.mechanisms
-	# 用竖立姿态（单格占地），从 (0,0) 走到 (1,0)
-	var standing: int = Shapes.resolve_orientation(Shapes.get_shape("domino"), "standing")
-	var s1 = State.new(Shapes.get_shape("domino"), standing, Vector3i(0, 0, 1))
-	var step: Dictionary = Core.apply_step(_b, s1, null, Vector3i(1, 0, 0))
-	check(step != null, "应能走到碎裂砖上")
-	if step != null:
-		check(not bool(step["fall"]), "站在碎裂砖上不应该碎（否则没法玩）")
-		check(not (step["mech"] as Object).is_broken(Vector3i(1, 0, 1)), "刚站上去时还没碎")
-		# 再往右走一步（离开碎裂砖）
-		var step2: Dictionary = Core.apply_step(_b, step["state"], step["mech"], Vector3i(1, 0, 0))
-		check(step2 != null, "应能从碎裂砖上走开")
-		if step2 != null:
-			check((step2["mech"] as Object).is_broken(Vector3i(1, 0, 1)), "离开后该格应碎掉")
-			check(not Mech.is_solid(_b, defs, step2["mech"], Vector3i(1, 0, 1)), "碎掉后不可站")
-
-
 func _verified_portal_level() -> Dictionary:
 	# 两块岛（x=0..3 与 x=5..8），中间 x=4 整列空洞；传送门 (1,1)↔(5,1)。
 	# 已用求解器验证：2 步可解，且去掉传送门后不可解（承重）。
@@ -274,9 +241,9 @@ func _test_toggle_needed() -> void:
 	# 走一步到开关上 → 桥被关掉
 	var standing: int = Shapes.resolve_orientation(Shapes.get_shape("domino"), "standing")
 	var st = State.new(Shapes.get_shape("domino"), standing, Vector3i(2, 0, 0))
-	var m1 = Mech.on_enter(_b, defs, init_mech, st.world_cells(), [])
+	var m1 = Mech.on_enter(_b, defs, init_mech, st.world_cells())
 	check(not (m1 as Object).flag("br1"), "第一次踩开关 → 桥关")
-	var m2 = Mech.on_enter(_b, defs, m1, st.world_cells(), [])
+	var m2 = Mech.on_enter(_b, defs, m1, st.world_cells())
 	check((m2 as Object).flag("br1"), "第二次踩开关 → 桥开（翻转语义：必须能被复原）")
 	check(m1.key() != m2.key(), "两次按压是不同的机关状态 → 必须是不同的搜索节点")
 	check(m1.key() != init_mech.key(), "按过开关的状态与初始状态不同")
