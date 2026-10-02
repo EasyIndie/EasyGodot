@@ -59,6 +59,7 @@ static func board_text(progress, key: String, limit: int = MAX_SHOWN) -> String:
 static func summary(progress, entries: Array) -> Dictionary:
 	# 总成绩：已通关数 / 最佳步数总和 / 已走到最优的关卡数
 	var completed: int = 0
+	var cleared_round: int = progress.completed_count()   # **本轮**通关数
 	var total_best: int = 0
 	var optimized: int = 0
 	var timed: int = 0          # 有计时记录的关卡数
@@ -78,6 +79,8 @@ static func summary(progress, entries: Array) -> Dictionary:
 			timed += 1
 			total_time += t
 	return {
+		"cleared_round": cleared_round,
+		"ever": progress.ever_count(),
 		"completed": completed,
 		"total": entries.size(),
 		"total_best": total_best,
@@ -88,9 +91,23 @@ static func summary(progress, entries: Array) -> Dictionary:
 
 
 static func summary_text(sum: Dictionary) -> String:
-	var t := "已通关 %d / %d" % [int(sum["completed"]), int(sum["total"])]
+	# **口径以「本轮」为准**：这是修一个真实的误读 ——
+	# 玩家点「再玩一遍」后，汇总若以历史记录打头显示「已通关 20 / 20」，读起来就是
+	# "进度根本没清掉"（其实清的是本轮，记录是资产、刻意保留）。所以：
+	#   有历史 -> 打头写「本轮 x / M」，历史数据单独标成「曾经通关 / 最好成绩」
+	#   无历史 -> 直接写「已通关 x / M」
+	var total: int = int(sum["total"])
+	var round_cleared: int = int(sum.get("cleared_round", sum["completed"]))
+	var ever: int = int(sum.get("ever", sum["completed"]))
+	var replaying: bool = ever > round_cleared
+	var t: String = ""
+	if replaying:
+		t = "本轮 %d / %d　·　曾经通关 %d" % [round_cleared, total, ever]
+	else:
+		t = "已通关 %d / %d" % [round_cleared, total]
 	if int(sum["completed"]) > 0:
-		t += "　·　总成绩 %d 步　·　已最优 %d 关" % [int(sum["total_best"]), int(sum["optimized"])]
+		var best_label: String = "本机最好成绩" if replaying else "总成绩"
+		t += "　·　%s %d 步　·　已最优 %d 关" % [best_label, int(sum["total_best"]), int(sum["optimized"])]
 		# 只有真的计过时才显示（旧存档没有时间记录，否则会冒出一个「—」）
 		if int(sum.get("timed", 0)) > 0:
 			t += "　·　合计最快 %s" % format_time(int(sum["total_time"]))

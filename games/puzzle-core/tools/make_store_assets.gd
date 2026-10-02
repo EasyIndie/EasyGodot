@@ -26,6 +26,10 @@ const OUT_ICON := "res://icon.png"
 const OUT_STORE_ICON := "res://store_icon_512.png"
 const OUT_FEATURE := "res://store_feature_1024x500.png"
 const OUT_TV_BANNER := "res://store_tv_banner_320x180.png"
+# ── Web 页面用（跟着游戏一起发布）──────────────────────
+const OUT_FAVICON := "res://web/favicon.png"                 # 浏览器标签页图标（小尺寸专用构图）
+const OUT_APPLE_TOUCH := "res://web/apple-touch-icon.png"    # iOS 主屏图标（180×180）
+const OUT_SPLASH := "res://web/splash.png"                   # 启动画面（**透明底**，底色交给平台）
 
 const FILL_ICON := 0.72    # 图标内容占画布短边的比例（留系统圆角遮罩的安全边）
 const FILL_FEATURE := 0.88
@@ -35,6 +39,14 @@ func _init() -> void:
 	_run()
 
 
+func _ensure_dir(path: String) -> void:
+	# 输出目录不存在时 Godot 存不了图（"Can't save PNG at path"），
+	# 而新建目录（如 res://web/）在干净克隆里必然不存在 —— 工具自己负责建。
+	var d: String = path.get_base_dir()
+	if d != "":
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(d))
+
+
 func _run() -> void:
 	var ok := true
 	ok = await _render(1024, 1024, "icon", OUT_ICON) and ok
@@ -42,8 +54,16 @@ func _run() -> void:
 	ok = await _render(1024, 500, "feature", OUT_FEATURE) and ok
 	# 电视 banner：Play 的 TV 商店页要求 320×180（等比缩小同一构图，小尺寸下依然认得出）
 	ok = await _render(320, 180, "feature", OUT_TV_BANNER) and ok
+	# Web：启动画面（透明底标记）+ 专用小图标。
+	# 启动画面刻意用**透明底**：底色由网页 CSS 与 boot_splash/bg_color 提供，
+	# 这样任何屏幕比例（object-fit: contain）都不会出现突兀的色块边框。
+	ok = await _render(512, 512, "mark", OUT_SPLASH) and ok
+	# 注意：视口有最小尺寸，实际会输出 64×64（报告以真实产物为准，见下方 report）
+	ok = await _render(64, 64, "mark_tight", OUT_FAVICON) and ok
+	ok = await _render(180, 180, "icon", OUT_APPLE_TOUCH) and ok
 	var report: Dictionary = {}
-	for p in [OUT_ICON, OUT_STORE_ICON, OUT_FEATURE, OUT_TV_BANNER]:
+	# 结构化输出必须**如实**列出所有产物（少写一个，下游就会以为它不存在）
+	for p in [OUT_ICON, OUT_STORE_ICON, OUT_FEATURE, OUT_TV_BANNER, OUT_SPLASH, OUT_FAVICON, OUT_APPLE_TOUCH]:
 		var img := Image.load_from_file(ProjectSettings.globalize_path(p))
 		report[p.get_file()] = [img.get_width(), img.get_height()] if img != null else []
 	print(JSON.stringify({"status": "ok" if ok else "fail", "assets": report}))
@@ -51,10 +71,24 @@ func _run() -> void:
 
 
 func _render(w: int, h: int, kind: String, out_path: String) -> bool:
+	_ensure_dir(out_path)
+	# 透明底构图（启动画面/图标标记）：必须把视口清屏色也设为全透明，
+	# 否则"透明底"只存在于想象里 —— 截出来的图会带一层不透明底色，
+	# 到了网页上就是一块突兀的方块（真实踩过）。
+	var transparent: bool = kind == "mark" or kind == "mark_tight"
+	var prev_clear: Color = RenderingServer.get_default_clear_color()
+	var prev_transparent: bool = root.transparent_bg
+	if transparent:
+		RenderingServer.set_default_clear_color(Color(0, 0, 0, 0))
+		root.transparent_bg = true
 	root.size = Vector2i(w, h)
 	var painter := Painter.new()
 	painter.kind = kind
-	painter.fill_ratio = FILL_ICON if kind == "icon" else FILL_FEATURE
+	painter.fill_ratio = FILL_FEATURE
+	if kind == "icon" or kind == "mark":
+		painter.fill_ratio = FILL_ICON
+	elif kind == "mark_tight":
+		painter.fill_ratio = 0.92   # 小图标要更满：留白多等于看不见
 	root.add_child(painter)
 	painter.size = Vector2(float(w), float(h))
 	painter.position = Vector2.ZERO
@@ -74,6 +108,9 @@ func _render(w: int, h: int, kind: String, out_path: String) -> bool:
 	print("  已生成 %s  %d×%d" % [out_path, img.get_width(), img.get_height()])
 	painter.queue_free()
 	await process_frame
+	if transparent:
+		RenderingServer.set_default_clear_color(prev_clear)
+		root.transparent_bg = prev_transparent
 	return true
 
 
@@ -94,8 +131,19 @@ class Painter extends Control:
 
 	func _draw() -> void:
 		var vp := get_viewport_rect().size
-		_draw_backdrop(vp)
-		var shapes: Array = _icon_shapes() if kind == "icon" else _feature_shapes()
+		if kind != "mark" and kind != "mark_tight":
+			_draw_backdrop(vp)
+		# mark / mark_tight 是"透明底"构图：底色由平台提供（网页 CSS / boot_splash bg_color）
+		var shapes: Array = []
+		match kind:
+			"icon":
+				shapes = _icon_shapes()
+			"feature":
+				shapes = _feature_shapes()
+			"mark":
+				shapes = _mark_shapes(true)
+			_:
+				shapes = _mark_shapes(false)
 		# 包围盒 → 自动缩放与居中（改构图不用手算像素）
 		var box := _bbox(shapes)
 		var u: float = minf(vp.x * fill_ratio / maxf(box.size.x, 0.001),
@@ -138,6 +186,19 @@ class Painter extends Control:
 	# ── 构图 ──
 
 	# 图标：立着的骨牌（2 格高）+ 前左方一格的目标格 + 影子
+	func _mark_shapes(with_ring: bool) -> Array:
+		# 品牌标记：影子 + 目标格 +（可选光圈）+ 竖立的骨牌。
+		# 小尺寸（favicon）去掉光圈：细圆环在 16px 下只会糊成一团灰。
+		var out: Array = []
+		out.append(_shadow(Vector2(0.0, 0.10), Vector2(1.10, 0.50)))
+		out.append_array(_tile_at(1, 0, Game.COLOR_GOAL, false))
+		if with_ring:
+			out.append_array(_ring(Vector2(1.0, 0.5), 0.52, Game.COLOR_GOAL_RING))
+		out.append_array(_cube(Vector2.ZERO, 0.0))
+		out.append_array(_cube(Vector2.ZERO, 1.0))
+		return out
+
+
 	func _icon_shapes() -> Array:
 		var out: Array = []
 		out.append(_shadow(Vector2(0.0, 0.10), Vector2(1.10, 0.50)))

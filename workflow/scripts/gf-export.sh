@@ -70,6 +70,13 @@ for p in "${PLATFORMS[@]}"; do
 			"$SCRIPT_DIR/gf-web-inject.sh" "$PROJECT"
 			"$GODOT" --headless --no-header --path "$PROJECT" --export-release "Web" "build/web/index.html"
 			# 附带静态辅助页（如 WebGL 诊断页）到站点根目录，随 Pages 一起发布
+			# 网页要的是**散文件**（浏览器直接 GET），所以项目里的 web/*.png 也要拷进导出目录 ——
+			# 只放进 .pck 的话，favicon / apple-touch-icon 会 404。
+			for asset in favicon.png apple-touch-icon.png; do
+				if [ -f "$PROJECT/web/$asset" ]; then
+					cp "$PROJECT/web/$asset" "$PROJECT/build/web/$asset"
+				fi
+			done
 			if [ -d "$SCRIPT_DIR/../web" ]; then
 				cp -r "$SCRIPT_DIR/../web/." "$PROJECT/build/web/"
 				echo "    已附带静态页: $(ls "$SCRIPT_DIR/../web" | tr '\n' ' ')"

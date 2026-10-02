@@ -877,6 +877,9 @@ func _hide_hud(hidden: bool) -> void:
 
 func _on_level_select_closed() -> void:
 	_hide_hud(false)
+	# 选关界面里可能刚「重置进度」过 —— 关掉时必须重算 HUD，
+	# 否则左上角还挂着重置前的「已通关 x / M」（真实反馈：重置完仍显示已通关）
+	_update_hud()
 
 
 func _on_level_chosen(index: int) -> void:

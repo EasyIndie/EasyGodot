@@ -210,11 +210,8 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 		_grid.add_child(card)
 		_cards.append(card)
 
+	# 汇总文案的「本轮 / 曾经」口径统一在 Leaderboard.summary_text 里处理（只留一处真相）
 	_subtitle.text = Leaderboard.summary_text(Leaderboard.summary(_progress, entries))
-	if _progress.replay_round():
-		# 重玩一轮时汇总里的「已通关」是历史记录口径（记录不清），必须额外标出本轮进度，
-		# 否则玩家会以为进度被清掉了（其实只清本轮）
-		_subtitle.text += "　·　本轮 %d / %d" % [_progress.completed_count(), entries.size()]
 	_apply_layout()
 	_show_detail(_current)
 	_set_confirm(false)

@@ -14,6 +14,7 @@ var failures: int = 0
 func _init() -> void:
 	_remove(TMP)
 	_test_time()
+	_test_summary_round()
 	_test_empty()
 	_test_summary()
 	_test_board_text()
@@ -61,6 +62,45 @@ func _moves(n: int) -> Array:
 
 
 # ---- 测试组 ----
+
+func _test_summary_round() -> void:
+	# 真实反馈：「再玩一遍之后，还是显示已通关」。
+	# 根因是汇总以**历史记录**口径打头（记录刻意保留），读起来像进度没清。
+	# 现在口径以本轮为准，这里把两种状态都钉死。
+	var tmp := "user://test_lb_round.json"
+	_remove(tmp)
+	var pr = Progress.new(tmp)
+	var entries: Array = []
+	for i in range(4):
+		entries.append({"key": "level_%02d" % (i + 1), "optimal": 2 + i})
+
+	# 全通关：显示「已通关 x / M」，不该出现「本轮」
+	for i in range(4):
+		pr.record_win("level_%02d" % (i + 1), _moves(2 + i))
+	var full: Dictionary = Leaderboard.summary(pr, entries)
+	var t_full: String = Leaderboard.summary_text(full)
+	check(t_full.contains("已通关 4 / 4"), "全通关时应显示已通关 4 / 4（实际：%s）" % t_full)
+	check(not t_full.contains("本轮"), "没有历史遗留时不该出现「本轮」")
+
+	# 「再玩一遍」：本轮清零，记录保留 -> 打头必须是「本轮 0 / 4」
+	pr.reset_campaign()
+	var round: Dictionary = Leaderboard.summary(pr, entries)
+	var t_round: String = Leaderboard.summary_text(round)
+	check(int(round["cleared_round"]) == 0, "再玩一遍后本轮通关数应为 0")
+	check(int(round["ever"]) == 4, "历史通关数应保留为 4")
+	check(t_round.begins_with("本轮 0 / 4"), "再玩一遍后汇总必须以「本轮 0 / 4」打头（实际：%s）" % t_round)
+	check(t_round.contains("曾经通关 4"), "历史成绩要单独标出「曾经通关 4」")
+	check(not t_round.contains("已通关 4 / 4"), "不能再显示成「已通关 4 / 4」——这正是被误读的地方")
+	check(t_round.contains("本机最好成绩"), "历史口径的步数总和要改名，避免又被当成当前进度")
+
+	# 「重置进度」：彻底清空 -> 回到「已通关 0 / 4」
+	pr.reset()
+	var reset_sum: Dictionary = Leaderboard.summary(pr, entries)
+	var t_reset: String = Leaderboard.summary_text(reset_sum)
+	check(t_reset.begins_with("已通关 0 / 4"), "重置后面应显示已通关 0 / 4（实际：%s）" % t_reset)
+	check(not t_reset.contains("本轮"), "重置后没有历史遗留，不该出现「本轮」")
+	_remove(tmp)
+
 
 func _test_time() -> void:
 	# 用时格式化：边界要盯死，因为它是玩家直接读的数

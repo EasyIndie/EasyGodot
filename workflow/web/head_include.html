@@ -31,7 +31,71 @@
     display: block;
   }
   .gf-noscroll { position: fixed; inset: 0; }
+
+  /* ── 加载画面：换成本项目自己的样式 ─────────────────────────────────────
+     默认是「Godot 的 logo + 一块 #242424 灰底」，既不是我们的品牌，也和游戏配色完全不搭。
+     这里做三件事（都不需要自定义 HTML 模板，风险最低）：
+       1) 底色换成游戏的深蓝渐变（与 boot_splash/bg_color 同色，切换时不会闪一下）
+       2) 标题 + 「正在加载…」用 CSS ::before/::after 加在 #status 上（不插 DOM、不靠 JS）
+       3) 进度条改成我们的圆角橙色条（浏览器原生样式太出戏）
+     #status 在加载完成后会被模板隐藏，所以这些装饰会一起消失，不需要额外清理。 */
+  #status {
+    background: radial-gradient(120% 120% at 50% 34%, #1b2540 0%, #0b0f18 62%) !important;
+    color: #cfd8ea !important;
+    font-family: "Noto Sans SC", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  }
+  #status::before {
+    content: "滚方块";
+    font-size: clamp(18px, 4.2vmin, 34px);
+    font-weight: 700;
+    letter-spacing: .22em;
+    text-indent: .22em;            /* letter-spacing 会在末字后留空隙，用缩进补回视觉居中 */
+    color: #eaf1ff;
+    margin-bottom: 1.6vmin;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, .45);
+  }
+  #status::after {
+    content: "正在加载…";
+    font-size: clamp(12px, 2.1vmin, 16px);
+    letter-spacing: .16em;
+    text-indent: .16em;
+    color: #8fa3c4;
+    margin-top: 1.8vmin;
+  }
+  /* 启动标记：自身尺寸 + 上限（模板的 .fullsize--true 会把它拉满整屏） */
+  #status-splash {
+    width: auto !important;
+    height: auto !important;
+    max-width: min(44vmin, 300px) !important;
+    max-height: min(44vmin, 300px) !important;
+    filter: drop-shadow(0 18px 40px rgba(0, 0, 0, .45));
+  }
+  #status-progress {
+    width: min(52vmin, 360px) !important;
+    height: 6px;
+    -webkit-appearance: none;
+    appearance: none;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .10);
+    overflow: hidden;
+  }
+  #status-progress::-webkit-progress-bar { background: rgba(255, 255, 255, .10); border-radius: 999px; }
+  #status-progress::-webkit-progress-value { background: linear-gradient(90deg, #ffc06a, #ff8a3d); border-radius: 999px; }
+  #status-progress::-moz-progress-bar { background: #ff9a4d; border-radius: 999px; }
+  #status-notice {
+    background-color: #2a1c22 !important;
+    border: 1px solid #7a3546 !important;
+    color: #ffd9e2 !important;
+    max-width: min(80vw, 720px);
+    padding: .7rem 1rem;
+  }
 </style>
+<!-- 网页图标：用专门画的小图标（项目图标是 1024²，缩到 16px 会糊成一团）。
+     下面的 JS 还会把模板自动生成的两条 link 指过来，双保险。 -->
+<link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="apple-touch-icon.png">
+<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
 <script>
 (function () {
   "use strict";
@@ -55,6 +119,21 @@
     } catch (e) {}
   }
   patchViewport();   // head_include 注在 Godot 的 viewport meta 之后，这里能立刻生效
+
+  /* ── 0) 网页图标 ────────────────────────────────────────────────────────
+     模板会根据项目图标自动生成两条 link（index.icon.png / index.apple-touch-icon.png）。
+     它们是 1024² 的项目图标，做 favicon 太糊，所以这里**改指向**专门画的小图标。
+     用改而不是删：万一小图标没被拷进站点，至少还留着模板那条（不会变成没有图标）。 */
+  function patchIcons() {
+    try {
+      var fav = document.getElementById("-gd-engine-icon");
+      if (fav) { fav.setAttribute("href", "favicon.png"); }
+      var apple = document.querySelector('link[rel="apple-touch-icon"]');
+      if (apple) { apple.setAttribute("href", "apple-touch-icon.png"); }
+    } catch (e) {}
+  }
+  patchIcons();
+  document.addEventListener("DOMContentLoaded", patchIcons);
   document.addEventListener("DOMContentLoaded", patchViewport);   // 兜底
 
   window.gfSafeInsets = function () {
