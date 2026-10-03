@@ -478,6 +478,15 @@ func _build_board() -> void:
 	tiles.clear()
 	goal_tiles.clear()
 	goal_rings.clear()
+	# 机关查找表也必须清空：它们存的是**节点引用**，而上一次的节点在
+	# _free_all_children() 里已经被 free() 掉了。留着就是一堆野引用 ——
+	# refresh_mechanisms() 一碰就 "Trying to cast a freed object"，
+	# 而且每次重开都会往里累加（2→4→6→8…）。玩家看到的就是「机关关坠落之后
+	# 按 R 重开不对/关卡坏了」（真实反馈：第 13 关坠落后无法按 R 重开）。
+	# 教训：**持有节点的容器，必须和节点在同一次生命周期里被清空**，
+	# 只清一半（tiles/goal_tiles 清了、机关表没清）比不清更难发现。
+	_mech_tiles.clear()
+	_bridge_ghosts.clear()
 	_tile_mat_a = _make_tile_material(COLOR_TILE_A)
 	_tile_mat_b = _make_tile_material(COLOR_TILE_B)
 	_tile_mat_goal = _make_tile_material(COLOR_GOAL, 0.55)
@@ -577,7 +586,15 @@ func refresh_mechanisms() -> void:
 		var z: int = int(parts[1])
 		var role: String = str(Mech.roles_of(board.mechanisms).get(key, ""))
 		for mi in _mech_tiles[key]:
+			# 跳过已释放的节点：刷新外观属于「尽量做对」的事，
+			# 单个坏引用不该把整轮刷新打断（那会让新瓦片停在旧外观上，
+			# 而玩家看到的是“关卡坏了”）。真正的根因已修（_build_board 清空本表），
+			# 这里是第二层防护。
+			if not is_instance_valid(mi):
+				continue
 			var m := mi as MeshInstance3D
+			if m == null:
+				continue
 			match role:
 				"switch":
 					var on: bool = false
@@ -598,6 +615,8 @@ func refresh_mechanisms() -> void:
 	# 桥的幽灵框：桥开着时收起（真瓦片已经在那个位置）
 	for key in _bridge_ghosts.keys():
 		var parts: Array = str(key).split(",")
+		if not is_instance_valid(_bridge_ghosts[key]):
+			continue
 		var g := _bridge_ghosts[key] as MeshInstance3D
 		if g != null:
 			g.visible = not _is_bridge_open(int(parts[0]), int(parts[1]))

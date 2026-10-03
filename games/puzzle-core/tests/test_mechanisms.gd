@@ -31,6 +31,7 @@ func _init() -> void:
 	_test_validate_necessity()
 	_test_bad_data_is_loud()
 	_test_format_backcompat()
+	_test_reload_mechanism_level()
 
 	var result: Dictionary = {
 		"suite": "test_mechanisms",
@@ -369,3 +370,53 @@ func _test_format_backcompat() -> void:
 	var st = lv["start"]
 	var nxt = Core.apply_move_on(lv["board"], st, Moves.DIRS[0])
 	check(nxt != null or true, "兼容入口 apply_move_on 可用")
+
+
+func _test_reload_mechanism_level() -> void:
+	# ── 重开机关关：节点查找表必须被清空 ──
+	# 真实反馈：「第 13 关坠落后，无法按 R 重开」。
+	# 根因：_build_board() 清了 tiles / goal_tiles / goal_rings，**却漏了
+	# _mech_tiles 与 _bridge_ghosts**（这两个存的是节点引用）。重开时上一次的节点
+	# 已经被 _free_all_children() free 掉了，字典里留着一堆野引用 →
+	#   · refresh_mechanisms() 撞上第一个野引用就**中断** → 新瓦片的状态外观
+	#     （开关明暗 / 桥的开合 / 幽灵框）不会被刷新
+	#   · 而且每重开一次就往里累加（2→4→6→8…）
+	# 这个 bug 一直是绿的，因为**没有任何测试在同一个场景里重载过机关关** ——
+	# 所有测试都是"新场景 + 加载一次"。教训：只清一半的容器比不清更难发现。
+	var game = _fresh_game()
+	for idx in [12, 15]:                       # 第 13 关（传送门）、第 16 关（沟+开关桥）
+		var lv: Dictionary = Loader.load_file(_level_path(idx))
+		game.load_dict(lv)
+		var tiles0: int = game.mech_tile_count()
+		var ghosts0: int = game.bridge_ghost_count()
+		check(tiles0 > 0, "第 %d 关应有机关瓦片" % [idx + 1])
+		# 连续重载 4 次：计数必须完全不变（野引用会累加）
+		for i in range(4):
+			game.load_dict(lv)
+			check(game.mech_tile_count() == tiles0,
+				"第 %d 关第 %d 次重载后机关瓦片数应仍为 %d，实际 %d（查找表没清空）" % [
+					idx + 1, i + 1, tiles0, game.mech_tile_count()])
+			check(game.bridge_ghost_count() == ghosts0,
+				"第 %d 关第 %d 次重载后幽灵框数应仍为 %d，实际 %d" % [
+					idx + 1, i + 1, ghosts0, game.bridge_ghost_count()])
+		# 重载后仍必须可解（用求解器驱动通关）——这才是玩家要的"重开能继续玩"
+		var sol: Dictionary = Solver.new(game.board, game.state).solve(game.mech)
+		check(sol["solvable"], "第 %d 关重载后应仍可解" % [idx + 1])
+		for label in sol["solution"]:
+			game.try_move(Moves.direction_from_label(label))
+		check(game.is_won(), "第 %d 关重载后应仍能通关" % [idx + 1])
+	game.queue_free()
+
+
+func _fresh_game():
+	var game = load("res://scenes/game.gd").new()
+	game.animate = false        # headless：不需要动画，判定路径完全一致
+	var root_node := Node3D.new()
+	root_node.add_child(game)
+	# 场景树：game 需要 add_child 自身的渲染节点，所以挂到 root 下
+	get_root().add_child(root_node)
+	return game
+
+
+func _level_path(idx: int) -> String:
+	return "res://levels/level_%02d.json" % [idx + 1]
