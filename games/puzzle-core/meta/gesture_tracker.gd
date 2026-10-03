@@ -10,16 +10,23 @@
 #   t.feed(pos) -> Vector3i  # 每个拖动事件；返回要执行的移动（ZERO = 还不到时候）
 #   t.cancel()               # 抬手
 #
-# **出方向后锚点前移到当前位置** —— 这是"跟手"的来源：一次长拖可以连着滚多格。
-# 也正因为锚点前移，掉头必须重新滑满一格，手指抖动不会来回滚。
+# ── 一条铁律：**一次手势至多产生一步移动** ──
+# 曾经实现成"锚点前移 → 一次长拖连着滚多格"（像摇杆），真机立刻被反馈为
+# 「滑一次会滚很多次」：一次 200px 的滑动在小屏手机上会滚 5 格。
+# 根因是设计错位：**连滚是动作游戏的手感，解谜游戏里每一步都要想**，
+# 多滚一格就是误操作（还会污染步数与回放记录）。
+# 真正需要修的"不跟手"是**别等抬手才判定**（见下）和**动画期间别丢输入**
+# （见 main.gd 的 _flush_pending_move），不是"一次手势多走几步"。
+# 所以：滑过阈值 → 立刻出这一手（不等抬手）→ **本手势作废**，抬手后才能再来一步。
 extends RefCounted
 
 const Gesture = preload("res://meta/gesture.gd")
 
 var dirs: Dictionary = {}            # 网格方向 → 屏幕上走一格的向量（像素，不归一化）
 var prev: Vector3i = Vector3i.ZERO   # 上一次发出的方向（歧义带里粘滞用）
-var anchor: Vector2 = Vector2.ZERO   # 当前位置基准（每次出方向后前移）
+var anchor: Vector2 = Vector2.ZERO   # 本手势的起点（出方向后不再移动）
 var active: bool = false
+var fired: bool = false              # 本手势是否已经出过一步（出了就作废）
 
 
 func _init(screen_dirs: Dictionary = {}) -> void:
@@ -32,6 +39,7 @@ func set_dirs(screen_dirs: Dictionary) -> void:
 
 func begin(pos: Vector2) -> void:
 	active = true
+	fired = false
 	anchor = pos
 
 
@@ -40,8 +48,9 @@ func cancel() -> void:
 
 
 # 手指"指向"哪个方向（还没到阈值也返回）—— 用于给玩家实时反馈与进度显示。
+# 已经出过一步的手势不再指向任何方向（指示器随之淡出）。
 func peek(pos: Vector2) -> Vector3i:
-	if not active:
+	if not active or fired:
 		return Vector3i.ZERO
 	return Gesture.resolve(pos - anchor, dirs, prev)
 
@@ -59,9 +68,9 @@ func ratio(pos: Vector2) -> float:
 	return clampf(Gesture.progress(pos - anchor, dirs, d) / need, 0.0, 1.0)
 
 
-# 处理一个拖动位置：返回本次要执行的移动（ZERO = 不动）。
+# 处理一个拖动位置：返回本次要执行的移动（ZERO = 不动）。一次手势至多返回一步。
 func feed(pos: Vector2) -> Vector3i:
-	if not active:
+	if not active or fired:
 		return Vector3i.ZERO
 	var delta: Vector2 = pos - anchor
 	var d: Vector3i = Gesture.resolve(delta, dirs, prev)
@@ -69,6 +78,6 @@ func feed(pos: Vector2) -> Vector3i:
 		return Vector3i.ZERO
 	if Gesture.progress(delta, dirs, d) < Gesture.step_px(dirs, d):
 		return Vector3i.ZERO
-	anchor = pos      # 连滚：锚点前移
+	fired = true      # 本手势作废：继续拖、来回拖都不会再出第二步
 	prev = d
 	return d

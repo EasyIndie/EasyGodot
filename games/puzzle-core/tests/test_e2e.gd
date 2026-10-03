@@ -319,7 +319,21 @@ func _test_touch_controls() -> void:
 	probe.drag_move(Vector2(104.0, 102.0))
 	probe.drag_end()
 	check(got2.is_empty(), "轻微移动不该触发移动（那是点按）")
+	# 一次手势 **只许一步**：真机反馈过「滑一次会滚很多次」，
+	# 所以这里用一次跨度很大的长拖来钉住（格宽的 6 倍）
+	var got3: Array = []
+	var probe3 := TouchControls.new()
+	root.add_child(probe3)
+	probe3.set_screen_dirs(_touch_dirs())
+	probe3.direction.connect(func(d: Vector3i) -> void: got3.append(d))
+	probe3.drag_begin(Vector2(600.0, 400.0))
+	var cell: Vector2 = _touch_dirs()[Vector3i(1, 0, 0)]
+	for i in range(1, 13):
+		probe3.drag_move(Vector2(600.0, 400.0) + cell.normalized() * (cell.length() * 0.5 * float(i)))
+	probe3.drag_end()
+	check(got3.size() == 1, "一次长拖只能触发一步移动，实际 %d 步" % got3.size())
 	probe.queue_free()
+	probe3.queue_free()
 
 	var scene = load("res://scenes/main.tscn").instantiate()
 	# 显式设定视口尺寸：headless 下默认窗口尺寸不可靠（get_visible_rect 可能为 0，

@@ -31,9 +31,10 @@ func _init() -> void:
 	_test_ambiguous_stickiness()
 	_test_threshold_scaling()
 	_test_tracker_basics()
-	_test_tracker_chain()
+	_test_one_move_per_gesture()
 	_test_slow_drag_still_works()
-	_test_reversal_needs_full_step()
+	_test_second_gesture_fires_again()
+	_test_no_flip_within_gesture()
 	_test_rotated_camera()
 	_test_degenerate_input()
 	var result: Dictionary = {
@@ -152,25 +153,43 @@ func _test_tracker_basics() -> void:
 	check(not t.active, "cancel 后应停止跟踪")
 
 
-func _test_tracker_chain() -> void:
-	# 一次长拖连滚多格：这是"跟手"的核心
+func _test_one_move_per_gesture() -> void:
+	# ── 铁律：一次手势至多一步 ──
+	# 真机反馈：「滑一次会滚很多次」——上一版做成"锚点前移 → 像摇杆一样连滚"，
+	# 一次 200px 的滑动在小屏手机上会滚 5 格。对解谜游戏来说多滚一格就是误操作。
+	# 这里把规则钉死：**同一个手势里，无论继续拖多远、来回拖几次，都只出第一步**。
+	var step := Vector2(0.8165, 0.5774) * CELL
+	# 1) 一次长拖（4 格屏宽）只出一步
 	var t = Tracker.new(DIRS)
-	var step := Vector2(0.8165, 0.5774) * CELL * 1.2   # 阈值是 1.05 格，滑"刚好一格"不该触发
 	t.begin(Vector2.ZERO)
 	var got: Array = []
-	for i in range(1, 5):
-		var d: Vector3i = t.feed(step * float(i))
+	for i in range(1, 9):
+		var d: Vector3i = t.feed(step * float(i) * 0.5)
 		if d != Vector3i.ZERO:
 			got.append(d)
-	check(got.size() == 4, "连续滑四格应触发四次，实际 %d 次" % got.size())
+	check(got.size() == 1, "一次长拖只能出一步，实际 %d 步 %s" % [got.size(), str(got)])
+	check(got.size() == 1 and got[0] == Vector3i(1, 0, 0), "那一步应是 +x")
+	# 2) 出过一步之后：来回拖、换方向拖，都不许再出
+	check(t.feed(step * 4.0) == Vector3i.ZERO, "出过一步后继续同向拖不该再出")
+	check(t.feed(Vector2(-step.x * 6.0, -step.y * 6.0)) == Vector3i.ZERO, "出过一步后来回拖也不该再出")
+	check(t.feed(Vector2(0.8165, -0.5774) * CELL * 3.0) == Vector3i.ZERO, "出过一步后换方向拖也不该再出")
+	check(t.peek(step * 4.0) == Vector3i.ZERO, "出过一步的手势不该再指向任何方向（指示器要淡出）")
+
+
+func _test_second_gesture_fires_again() -> void:
+	# 抬手后再滑 = 新手势，必须能再出一步（否则就"滑不动"了）
+	var step := Vector2(0.8165, 0.5774) * CELL
+	var t = Tracker.new(DIRS)
+	var got: Array = []
+	for k in range(3):
+		t.begin(Vector2(float(k) * 10.0, 0.0))
+		var d: Vector3i = t.feed(Vector2(float(k) * 10.0, 0.0) + step * 1.2)
+		if d != Vector3i.ZERO:
+			got.append(d)
+		t.cancel()
+	check(got.size() == 3, "三次独立手势应各出一步，实际 %d 步" % got.size())
 	for d in got:
-		check(d == Vector3i(1, 0, 0), "连滚的每一步都应是 +x")
-	# 中途换向：先 +x 一格，再往 -z 滑一格
-	var t2 = Tracker.new(DIRS)
-	t2.begin(Vector2.ZERO)
-	t2.feed(step)
-	var d2: Vector3i = t2.feed(step + Vector2(0.8165, -0.5774) * CELL * 1.6)
-	check(d2 == Vector3i(0, 0, -1), "换向滑一格应触发 -z（实际 %s）" % str(d2))
+		check(d == Vector3i(1, 0, 0), "每一步都应是 +x")
 
 
 func _test_slow_drag_still_works() -> void:
@@ -186,15 +205,14 @@ func _test_slow_drag_still_works() -> void:
 	check(got == Vector3i(1, 0, 0), "慢速拖动（无时间上限）也必须能触发移动")
 
 
-func _test_reversal_needs_full_step() -> void:
-	# 出方向后锚点前移，所以掉头要重新滑满一格 —— 手指回抖不会来回滚
+func _test_no_flip_within_gesture() -> void:
+	# 出过一步之后手指回抖：不许反向滚动（一步手势就是一步，回抖不该再触发）
+	var step := Vector2(0.8165, 0.5774) * CELL
 	var t = Tracker.new(DIRS)
-	var step := Vector2(0.8165, 0.5774) * CELL * 1.2
 	t.begin(Vector2.ZERO)
-	check(t.feed(step) == Vector3i(1, 0, 0), "先向右下滚一格")
-	check(t.feed(step * 0.6) == Vector3i.ZERO, "刚出方向就回抖不该立刻反向")
-	var back: Vector3i = t.feed(step * 0.6 - step * 1.3)
-	check(back == Vector3i(-1, 0, 0), "回滑满一格才应反向（实际 %s）" % str(back))
+	check(t.feed(step * 1.2) == Vector3i(1, 0, 0), "先向右下滚一格")
+	check(t.feed(step * 0.3) == Vector3i.ZERO, "回抖不该再出步")
+	check(t.feed(-step * 2.0) == Vector3i.ZERO, "反向拖到底也不该再出步")
 
 
 func _test_rotated_camera() -> void:

@@ -26,7 +26,9 @@
 extends RefCounted
 
 const AMBIG := 0.35          # 歧义带：两轴强度差 < 35% 视为"分不出来"（听粘滞规则）
-const STEP_RATIO := 1.05     # 一次移动要滑过 ≈1 格屏宽（含余量）
+# 一次移动要滑过多远（相对格子屏宽）。一次手势至多一步，所以偏短更跟手；
+# 下限 STEP_MIN 才是真正防误触的那道保险。
+const STEP_RATIO := 0.85
 const STEP_MIN := 22.0       # 阈值下限（像素）：太小会被手指抖动触发
 const STEP_MAX := 64.0       # 阈值上限（像素）：太大在平板上会滑不动
 const STEP_DEFAULT := 40.0   # 拿不到格子屏宽时的兜底
