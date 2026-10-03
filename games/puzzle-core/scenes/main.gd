@@ -75,9 +75,17 @@ const PROGRESS_PATH_SETTING := "puzzle/progress_path"
 # 面板宽度按"最少信息"定：左边只有「第 N 关」，右边是步数/计时/最佳（一行）。
 # 通关进度、总成绩这些**元信息**不在游戏画面里 —— 它们在选关界面，
 # 那里才是"看进度、挑关卡"的地方；游戏画面上多一行字就少一分棋盘的呼吸空间。
-const LEFT_PANEL_W := 122.0
-const RIGHT_PANEL_W := 152.0
-const PANEL_H := 72.0
+# 紧凑化：面板高度按"实际内容行数"给，不再统一 72 的宽松值。
+# 左边只有「第 N 关」一行；右边两行（当前：步数 + 计时 ／ 记录：最佳 + 最快）。
+# 少掉的每一像素都还给棋盘。
+const LEFT_PANEL_W := 100.0
+const RIGHT_PANEL_W := 148.0
+const LEFT_PANEL_H := 40.0
+const RIGHT_PANEL_H := 60.0
+# 没有记录时右面板只有一行（步数 + 计时），高度随之收一半。
+# 面板**按内容长高**是刻意的：信息在真正存在的时候才占位置。
+const RIGHT_PANEL_H_ONE_LINE := 40.0
+const HUD_MARGIN := 14.0
 
 const LIGHT_ENERGY := 1.15  # 主光基础亮度
 
@@ -486,15 +494,18 @@ func _update_safe_area() -> void:
 	# 电视会裁掉四周约 5%（过扫描），而系统安全区在电视上通常报 0 → 兜一个下限
 	if _is_tv_like():
 		ins = UiLayout.apply_tv_floor(ins, vp_size)
-	if UiLayout.insets_equal(ins, _safe_insets):
-		return
-	_safe_insets = ins
-	if touch_controls != null:
-		touch_controls.set_safe_insets(ins)
-	if level_select != null:
-		level_select.set_safe_insets(ins)
-	if ending != null:
-		ending.set_safe_insets(ins)
+	if not UiLayout.insets_equal(ins, _safe_insets):
+		_safe_insets = ins
+		if touch_controls != null:
+			touch_controls.set_safe_insets(ins)
+		if level_select != null:
+			level_select.set_safe_insets(ins)
+		if ending != null:
+			ending.set_safe_insets(ins)
+	# HUD 布局**每次都要重算**，不能挂在"安全区变了"的分支里：
+	# 它的输入不只是安全区，还有视口尺寸。早先的写法在"没有安全区的设备"
+	#（桌面、多数 Android）上会一路提前 return —— 面板永远停在创建时写死的偏移，
+	# **改了布局却不生效**（真实踩过：紧凑化改了半天，实测面板尺寸一点没变）。
 	_apply_hud_insets()
 
 
@@ -505,9 +516,9 @@ func _apply_hud_insets() -> void:
 	if left_panel == null or right_panel == null:
 		return
 	var vp: Vector2 = get_viewport().get_visible_rect().size
-	var sl: float = float(_safe_insets.get("left", 0.0)) + 22.0
-	var sr: float = float(_safe_insets.get("right", 0.0)) + 22.0
-	var st: float = float(_safe_insets.get("top", 0.0)) + 20.0
+	var sl: float = float(_safe_insets.get("left", 0.0)) + HUD_MARGIN
+	var sr: float = float(_safe_insets.get("right", 0.0)) + HUD_MARGIN
+	var st: float = float(_safe_insets.get("top", 0.0)) + HUD_MARGIN
 	# 可用宽度按比例分给两块面板：左边拿大头（关卡文字更长），右边保证最小可读宽度
 	var avail: float = maxf(vp.x - sl - sr, 120.0)
 	var gap: float = 12.0
@@ -515,18 +526,19 @@ func _apply_hud_insets() -> void:
 	var rw: float = clampf(minf(RIGHT_PANEL_W, avail - gap - lw), 96.0, RIGHT_PANEL_W)
 	var narrow: bool = vp.x < 620.0
 	# 窄屏同时缩小字号 + 缩短文案（宁可信息少一点，也不要溢出错行）
-	level_label.add_theme_font_size_override("font_size", 17 if narrow else 19)
-	moves_label.add_theme_font_size_override("font_size", 19 if narrow else 21)
-	best_label.add_theme_font_size_override("font_size", 11 if narrow else 12)
+	level_label.add_theme_font_size_override("font_size", 15 if narrow else 16)
+	moves_label.add_theme_font_size_override("font_size", 18 if narrow else 19)
+	time_label.add_theme_font_size_override("font_size", 14 if narrow else 15)
+	best_label.add_theme_font_size_override("font_size", 10 if narrow else 11)
 	_hud_narrow = narrow
 	left_panel.offset_left = sl
 	left_panel.offset_right = sl + lw
 	left_panel.offset_top = st
-	left_panel.offset_bottom = st + PANEL_H
+	left_panel.offset_bottom = st + LEFT_PANEL_H
 	right_panel.offset_left = -sr - rw
 	right_panel.offset_right = -sr
 	right_panel.offset_top = st
-	right_panel.offset_bottom = st + PANEL_H
+	right_panel.offset_bottom = st + RIGHT_PANEL_H
 	_update_hud()
 
 
@@ -1141,32 +1153,39 @@ func _update_hud() -> void:
 	# 「回放」按钮只在本关**确实有回放记录**时出现（没有记录就不留死按钮）
 	if touch_controls != null:
 		touch_controls.set_replay_available(progress.has_replay(_level_key(current_index)))
-	moves_label.text = "步数  %d" % game.move_count
+	moves_label.text = "步数 %d" % game.move_count
 	_update_clock_label(true)
 
-	# 最佳 / 参考步数：给「刷分」提供明确目标
+	# 第二行：本机记录（最佳步数 / 最快时间）。
+	# **「参考」（本关最少几步）不在这里** —— 它是"关卡信息"，不是"这一局的记录"，
+	# 放在选关界面的卡片与详情里（那里才是挑关卡、看目标的地方）。
+	# 游戏画面上只保留"你正在打的这一局"和"你自己的记录"。
 	var key: String = _level_key(current_index)
 	var best: int = progress.best_moves(key)
 	var optimal: int = -1
 	if current_index >= 0 and current_index < entries.size():
 		optimal = int(entries[current_index].get("optimal", -1))
-	# 面板宽度只有 196px：三条记录挤在一行会被直接裁掉（实测「已最…」少半截），
-	# 所以拆成两行短文本 —— 竖向空间是富余的，横向才是瓶颈。
 	var lines: Array = []
-	var step_parts: Array = []
 	if best > 0:
-		step_parts.append("最佳 %d" % best)
+		var step_txt: String = "最佳 %d" % best
 		if optimal > 0 and best == optimal:
-			step_parts.append("已最优")
-	elif optimal > 0:
-		step_parts.append("参考 %d" % optimal)
-	if step_parts.size() > 0:
-		lines.append("　·　".join(step_parts))
+			step_txt += "（已最优）"      # 打到理论最少步时的即时褒奖
+		lines.append(step_txt)
 	var bt: int = progress.best_time(key)
 	if bt >= 0:
 		lines.append("最快 %s" % Leaderboard.format_clock(bt))
-	# 最佳 / 参考合并成**一行**：它们是同一个用途（刷分目标），分两行只是占高度
-	best_label.text = "　·　".join(lines) if lines.size() > 0 else "　"
+	# 没有记录时**整行不显示**（连占位都不要）：面板高度随之收成一行。
+	# 有记录时它才长出来 —— 信息在真正存在的时候才出现。
+	best_label.text = "　·　".join(lines)
+	best_label.visible = lines.size() > 0
+	if right_panel != null:
+		# 面板高度**跟着内容走**：没有记录就只占一行。
+		# 这里直接改 offset（不能回头调 _apply_hud_insets：它末尾会调用 _update_hud，
+		# 会绕成无限递归）；只在值真的不同才写，避免每帧把布局标脏。
+		var want_bottom: float = right_panel.offset_top + \
+			(RIGHT_PANEL_H if best_label.visible else RIGHT_PANEL_H_ONE_LINE)
+		if not is_equal_approx(right_panel.offset_bottom, want_bottom):
+			right_panel.offset_bottom = want_bottom
 
 
 func _wait_for_anim() -> void:
@@ -1381,10 +1400,10 @@ func _setup_hud() -> void:
 	left_panel = left
 	left.anchor_left = 0.0
 	left.anchor_top = 0.0
-	left.offset_left = 22.0
-	left.offset_top = 20.0
-	left.offset_right = 22.0 + LEFT_PANEL_W
-	left.offset_bottom = 20.0 + 100.0
+	left.offset_left = HUD_MARGIN
+	left.offset_top = HUD_MARGIN
+	left.offset_right = HUD_MARGIN + LEFT_PANEL_W
+	left.offset_bottom = HUD_MARGIN + LEFT_PANEL_H
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 9)
 	level_label = Label.new()
@@ -1404,27 +1423,34 @@ func _setup_hud() -> void:
 	right_panel = right
 	right.anchor_left = 1.0
 	right.anchor_right = 1.0
-	right.offset_left = -22.0 - RIGHT_PANEL_W
-	right.offset_right = -22.0
-	right.offset_top = 20.0
-	right.offset_bottom = 20.0 + 78.0
+	right.offset_left = -(HUD_MARGIN + RIGHT_PANEL_W)
+	right.offset_right = -HUD_MARGIN
+	right.offset_top = HUD_MARGIN
+	right.offset_bottom = HUD_MARGIN + RIGHT_PANEL_H
+	# 两行，按**语义**分行：
+	#   第 1 行 = 这一局正在累积的数字（步数 + 计时）—— HBox 放同一行，省一行高度
+	#   第 2 行 = 本机的记录（最佳步数 / 最快时间）—— 刷分目标，颜色压暗
+	# 早先是三行各占一行，"当前"和"记录"混在一起，还要更多高度。
 	var rcol := VBoxContainer.new()
-	rcol.add_theme_constant_override("separation", 3)
+	rcol.add_theme_constant_override("separation", 2)
+	var rrow := HBoxContainer.new()
+	rrow.add_theme_constant_override("separation", 8)
+	rrow.alignment = BoxContainer.ALIGNMENT_CENTER
 	moves_label = Label.new()
-	moves_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	moves_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	moves_label.add_theme_font_size_override("font_size", 21)
+	moves_label.add_theme_font_size_override("font_size", 20)
 	moves_label.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0))
-	rcol.add_child(moves_label)
+	rrow.add_child(moves_label)
 	time_label = Label.new()
-	time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	time_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	time_label.add_theme_font_size_override("font_size", 15)
 	time_label.add_theme_color_override("font_color", Color(0.72, 0.82, 0.98))
 	time_label.text = Leaderboard.format_clock(0)
-	rcol.add_child(time_label)
+	rrow.add_child(time_label)
+	rcol.add_child(rrow)
 	best_label = Label.new()
 	best_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	best_label.add_theme_font_size_override("font_size", 13)
+	best_label.add_theme_font_size_override("font_size", 11)
 	best_label.add_theme_color_override("font_color", Color(0.62, 0.70, 0.86))
 	best_label.text = "　"
 	rcol.add_child(best_label)
@@ -1449,10 +1475,12 @@ func _make_panel(parent: Node) -> PanelContainer:
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.07, 0.09, 0.15, 0.55)
 	sb.set_corner_radius_all(14)
-	sb.content_margin_left = 18.0
-	sb.content_margin_right = 18.0
-	sb.content_margin_top = 12.0
-	sb.content_margin_bottom = 12.0
+	# 内边距直接决定面板的最小高度（PanelContainer 不会被 offset 压到比内容还小），
+	# 所以"紧凑"要在这里改：12 → 7，四周留白从"宽裕"变"刚好"。
+	sb.content_margin_left = 14.0
+	sb.content_margin_right = 14.0
+	sb.content_margin_top = 6.0
+	sb.content_margin_bottom = 6.0
 	sb.border_color = Color(1.0, 1.0, 1.0, 0.07)
 	sb.set_border_width_all(1)
 	pc.add_theme_stylebox_override("panel", sb)

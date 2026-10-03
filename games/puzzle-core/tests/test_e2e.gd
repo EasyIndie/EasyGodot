@@ -313,19 +313,52 @@ func _test_hud_minimal() -> void:
 	check(scene.level_label.text == "第 5 关", "游戏画面左上应只显示第几关，实际「%s」" % scene.level_label.text)
 	# 2) 通关进度条已从游戏画面移除（不是隐藏，是删掉）
 	check(not ("progress_bar" in scene), "游戏画面不应再有通关进度条")
-	# 3) 最佳/参考合并成一行（分两行只是占高度）
-	check(not scene.best_label.text.contains("\n"), "最佳/参考应在一行内，实际「%s」" % scene.best_label.text)
-	# 4) 触屏层只有三样东西：方向键盘（默认隐藏）、动作胶囊、手势提示
+	# 3) 右面板只有**两行**：当前（步数+计时 同一行）/ 记录（最佳+最快）
+	check(not scene.best_label.text.contains("\n"), "记录行不该换行，实际「%s」" % scene.best_label.text)
+	check(absf(scene.moves_label.position.y - scene.time_label.position.y) <= 4.0,
+		"步数与计时应在同一行（两个标签字号不同，基线允许几像素差：%.1f vs %.1f）" % [
+			scene.moves_label.position.y, scene.time_label.position.y])
+	# 4) 「参考」（本关最少几步）不在游戏画面上 —— 它是关卡信息，属于选关界面
+	check(not scene.best_label.text.contains("参考"), "游戏画面不该出现「参考」，实际「%s」" % scene.best_label.text)
+	#   但信息不能丢：选关界面的详情里必须有它
+	var detail: String = Leaderboard.detail_text(scene.entries, scene.progress, 4)
+	check(detail.contains("参考"), "选关详情应保留参考步数，实际「%s」" % detail)
+	# 5) 面板必须是真的紧凑（按内容行数给高度，不是统一 72/78 的宽松值）
+	check(scene.left_panel.size.y <= 42.0, "左面板高度应 ≤42，实际 %.0f" % scene.left_panel.size.y)
+	check(scene.right_panel.size.y <= 62.0, "右面板高度应 ≤62，实际 %.0f" % scene.right_panel.size.y)
+	# 没有记录时第二行整行不显示（不占位）；有记录时才长出来
+	check(not scene.best_label.visible, "没有记录时不该显示记录行")
+	check(scene.right_panel.size.y <= 46.0, "没有记录时面板应只有一行高，实际 %.0f" % scene.right_panel.size.y)
+	scene.progress.record_win(scene._level_key(4), ["right", "right", "right"], 12300)
+	scene._update_hud()
+	await process_frame
+	check(scene.best_label.visible, "有记录后应显示记录行")
+	check(scene.best_label.text.contains("最佳") and scene.best_label.text.contains("最快"),
+		"记录行应同时给出最佳步数与最快时间，实际「%s」" % scene.best_label.text)
+	check(scene.right_panel.size.y <= 62.0,
+		"两行时面板仍应 ≤62，实际 %.0f" % scene.right_panel.size.y)
+	check(scene.left_panel.size.x <= 104.0, "左面板宽度应 ≤104，实际 %.0f" % scene.left_panel.size.x)
+	# 5b) 布局常量必须**真的被应用**。
+	#     这里守的是一个真实存在的 bug：_update_safe_area() 曾经在"安全区没变化"时
+	#     提前 return，把 _apply_hud_insets() 一起跳过 —— 于是没有刘海/安全区为 0 的
+	#     设备（桌面、多数 Android）上，面板永远停在**创建时写死的偏移**，
+	#     改布局完全不生效（改了半天的"紧凑化"实测一点没变）。
+	check(absf(scene.left_panel.position.x - scene.HUD_MARGIN) < 1.0,
+		"面板左边距应等于 HUD_MARGIN(%.0f)，实际 %.1f（布局没被应用）" % [
+			scene.HUD_MARGIN, scene.left_panel.position.x])
+	check(absf(scene.left_panel.position.y - scene.HUD_MARGIN) < 1.0,
+		"面板上边距应等于 HUD_MARGIN(%.0f)，实际 %.1f" % [scene.HUD_MARGIN, scene.left_panel.position.y])
+	# 6) 触屏层只有三样东西：方向键盘（默认隐藏）、动作胶囊、手势提示
 	var tc = scene.touch_controls
 	var names: Array = tc.ui_child_names()
 	check(names.size() == 3, "触屏层应只有 3 个界面元素，实际 %s" % str(names))
 	check(not tc.pad_visible(), "方向键默认不显示（手势是主要输入）")
-	# 5) 方向键开关：开了就出现，关了就没
+	# 7) 方向键开关：开了就出现，关了就没
 	tc.set_pad_enabled(true)
 	check(tc.pad_visible(), "开启方向键后应显示")
 	tc.set_pad_enabled(false)
 	check(not tc.pad_visible(), "关闭方向键后应隐藏")
-	# 6) 「回放」按钮只在本关确实有回放记录时才出现（不留永远点不动的死按钮）
+	# 8) 「回放」按钮只在本关确实有回放记录时才出现（不留永远点不动的死按钮）
 	tc.set_replay_available(false)
 	check(not tc.replay_available(), "没有回放记录时不该显示回放按钮")
 	tc.set_replay_available(true)

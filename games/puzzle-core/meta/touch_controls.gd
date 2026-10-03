@@ -216,8 +216,8 @@ func bottom_inset() -> float:
 	# 底部被控件（含安全区）占用的高度，供 HUD 提示带避让。
 	# 数字键与动作胶囊并排，所以取两者更高的那个（不是相加）。
 	var pad: float = _unit * 3.0 if _pad_enabled else 0.0
-	var bh: float = clampf(_unit * 0.68, 44.0, 72.0)
-	return maxf(pad, bh) + float(_insets.get("bottom", 0.0)) + 24.0
+	var bh: float = clampf(_unit * 0.62, 44.0, 58.0)
+	return maxf(pad, bh) + float(_insets.get("bottom", 0.0)) + 18.0
 
 
 func set_screen_dirs(dirs: Dictionary) -> void:
@@ -363,7 +363,7 @@ func _apply_layout() -> void:
 		return
 	var vp: Vector2 = get_viewport().get_visible_rect().size
 	_unit = LAYOUT.touch_unit(vp)
-	var margin: float = _unit * 0.34
+	var margin: float = _unit * 0.24
 	var pad: float = _unit * 3.0
 	var sl: float = float(_insets.get("left", 0.0))
 	var sr: float = float(_insets.get("right", 0.0))
@@ -384,8 +384,8 @@ func _apply_layout() -> void:
 	for b in _action_buttons:
 		if b.visible:
 			visible_actions.append(b)
-	var bh: float = clampf(_unit * 0.68, 44.0, 72.0)
-	var bw: float = bh * 1.55
+	var bh: float = clampf(_unit * 0.62, 44.0, 58.0)
+	var bw: float = bh * 1.45
 	var sep: float = maxf(_unit * 0.16, 8.0)
 	for b in _action_buttons:
 		b.custom_minimum_size = Vector2(bw, bh)
@@ -412,7 +412,7 @@ func _apply_layout() -> void:
 	# 窄屏适配用「缩字号」而不是「换行」：换行会让提示条变成两行高，
 	# 在小屏上又会去挤棋盘；缩字号则始终是一行，位置稳定、可预测。
 	var max_w: float = maxf(vp.x - sl - sr - margin * 2.0, 120.0)
-	var fs: float = clampf(_unit * 0.26, 13.0, 22.0)
+	var fs: float = clampf(_unit * 0.23, 12.0, 18.0)
 	_hint_label.add_theme_font_size_override("font_size", int(fs))
 	var hs: Vector2 = _hint.get_combined_minimum_size()
 	if hs.x > max_w and hs.x > 1.0:
