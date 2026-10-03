@@ -42,6 +42,7 @@ func _run() -> void:
 	await _test_replay_playback()
 	await _test_replay_animation()
 	await _test_input_buffering()
+	await _test_hud_minimal()
 	_test_touch_controls()
 	await _test_move_animation_geometry()
 	await _test_respawn_animation()
@@ -298,6 +299,41 @@ func _touch_dirs() -> Dictionary:
 	}
 
 
+func _test_hud_minimal() -> void:
+	# ── 游戏画面上的信息量防线 ──
+	# 真机反馈："屏幕上的按钮和字太多，界面太满"。这里把"最少信息"钉成断言，
+	# 免得以后又一点一点加回去（每次加控件/加行字都会被这条拦住）。
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(1280, 720)
+	root.add_child(scene)
+	await process_frame
+	scene._do_load(4)
+	await create_timer(0.6).timeout
+	# 1) 左上角只有「第 N 关」——通关进度属于选关界面，不属于游戏画面
+	check(scene.level_label.text == "第 5 关", "游戏画面左上应只显示第几关，实际「%s」" % scene.level_label.text)
+	# 2) 通关进度条已从游戏画面移除（不是隐藏，是删掉）
+	check(not ("progress_bar" in scene), "游戏画面不应再有通关进度条")
+	# 3) 最佳/参考合并成一行（分两行只是占高度）
+	check(not scene.best_label.text.contains("\n"), "最佳/参考应在一行内，实际「%s」" % scene.best_label.text)
+	# 4) 触屏层只有三样东西：方向键盘（默认隐藏）、动作胶囊、手势提示
+	var tc = scene.touch_controls
+	var names: Array = tc.ui_child_names()
+	check(names.size() == 3, "触屏层应只有 3 个界面元素，实际 %s" % str(names))
+	check(not tc.pad_visible(), "方向键默认不显示（手势是主要输入）")
+	# 5) 方向键开关：开了就出现，关了就没
+	tc.set_pad_enabled(true)
+	check(tc.pad_visible(), "开启方向键后应显示")
+	tc.set_pad_enabled(false)
+	check(not tc.pad_visible(), "关闭方向键后应隐藏")
+	# 6) 「回放」按钮只在本关确实有回放记录时才出现（不留永远点不动的死按钮）
+	tc.set_replay_available(false)
+	check(not tc.replay_available(), "没有回放记录时不该显示回放按钮")
+	tc.set_replay_available(true)
+	check(tc.replay_available(), "有回放记录时应显示回放按钮")
+	scene.queue_free()
+	await process_frame
+
+
 func _test_touch_controls() -> void:
 	# 触屏操作层：滑动方向映射、按钮联动、不与选关/过渡打架
 	# 1) 方向解算本身的边界（角度容错 / 歧义粘滞 / 阈值缩放）由
@@ -381,7 +417,14 @@ func _test_touch_controls() -> void:
 	check(not scene.help_label.visible, "有状态提示时操作提示应让位（同一条带不压字）")
 	scene.fail_label.visible = false
 	scene._refresh_bands()
-	check(scene.help_label.visible, "状态提示收起后操作提示应回来")
+	# 触屏：静态操作文案**整条撤掉**（按钮上已经写着字，再列一遍是重复；
+	# 真机反馈"屏幕太满"）。所以这里断言的是"触屏下它就该一直不显示"，
+	# 桌面/电视仍保留键盘提示（另见 _test_hud_minimal）。
+	if scene.touch_controls != null and scene.touch_controls.is_shown():
+		check(not scene.help_label.visible, "触屏下不该常驻操作文案（状态提示收起后也不回来）")
+		check(scene.help_label.text == "", "触屏下操作文案应为空")
+	else:
+		check(scene.help_label.visible, "状态提示收起后操作提示应回来")
 
 	# 3) 方向信号应真的驱动方块。
 	# 合法方向从**当前局面**现算，而不是写死 +x：写死会让测试依赖关卡具体内容，

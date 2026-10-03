@@ -31,6 +31,9 @@ var _best_time: Dictionary = {}   # {key: int}  最快用时（毫秒）
 var _replays: Dictionary = {}     # {key: {moves: Array[String], move_count: int, at: int}}
 var _runs: Dictionary = {}        # {key: [{moves: int, at: int}, ...]} 按步数升序，本机榜
 var _ghost: bool = false          # 偏好：是否显示「上次的走法」影子（默认关，避免剧透）
+# 偏好：是否在屏幕上显示方向键。默认**关** —— 手势是主要输入，
+# 少一块按钮，棋盘就多一块（真机反馈：屏幕上的按钮太多太抢）。
+var _pad: bool = false
 
 
 func _init(p_path: String = DEFAULT_PATH) -> void:
@@ -78,6 +81,7 @@ func _read() -> void:
 				"at": int(r.get("at", 0)),
 			}
 	_ghost = bool(d.get("ghost", false))
+	_pad = bool(d.get("pad", false))
 	for k in d.get("runs", {}):
 		var arr = d["runs"][k]
 		if arr is Array:
@@ -121,6 +125,7 @@ func save() -> bool:
 		"replays": _replays,
 		"runs": _runs,
 		"ghost": _ghost,
+		"pad": _pad,
 	}, "\t"))
 	f.close()
 	return true
@@ -185,6 +190,16 @@ func ghost_enabled() -> bool:
 func set_ghost_enabled(on: bool) -> void:
 	# 玩家偏好，和记录一起存在进度文件里（下次启动仍然是他的选择）
 	_ghost = on
+	save()
+
+
+func pad_enabled() -> bool:
+	return _pad
+
+
+func set_pad_enabled(on: bool) -> void:
+	# 与影子一样：是玩家偏好，和记录一起存进进度文件
+	_pad = on
 	save()
 
 
@@ -258,4 +273,5 @@ func reset() -> void:
 	_replays.clear()
 	_runs.clear()
 	_ghost = false
+	_pad = false
 	save()

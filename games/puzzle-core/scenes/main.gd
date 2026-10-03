@@ -65,7 +65,6 @@ var win_label: Label
 var fail_label: Label
 var help_label: Label
 var best_label: Label
-var progress_bar: ProgressBar
 var _hud_narrow: bool = false
 var left_panel: PanelContainer
 var right_panel: PanelContainer
@@ -73,8 +72,12 @@ var backdrop: MeshInstance3D = null
 
 # 存档路径覆盖（测试用；空 = 用默认 user://progress.json）
 const PROGRESS_PATH_SETTING := "puzzle/progress_path"
-const LEFT_PANEL_W := 236.0
-const RIGHT_PANEL_W := 196.0
+# 面板宽度按"最少信息"定：左边只有「第 N 关」，右边是步数/计时/最佳（一行）。
+# 通关进度、总成绩这些**元信息**不在游戏画面里 —— 它们在选关界面，
+# 那里才是"看进度、挑关卡"的地方；游戏画面上多一行字就少一分棋盘的呼吸空间。
+const LEFT_PANEL_W := 122.0
+const RIGHT_PANEL_W := 152.0
+const PANEL_H := 72.0
 
 const LIGHT_ENERGY := 1.15  # 主光基础亮度
 
@@ -347,6 +350,15 @@ func _toggle_ghost() -> void:
 	_apply_ghost_setting(not progress.ghost_enabled())
 
 
+func _on_pad_toggled(on: bool) -> void:
+	# 方向键开关（选关界面里的那个）：偏好记在进度里，当帧生效
+	if progress != null:
+		progress.set_pad_enabled(on)
+	if touch_controls != null:
+		touch_controls.set_pad_enabled(on)
+		_refresh_bands()
+
+
 func _on_ghost_toggled(on: bool) -> void:
 	_apply_ghost_setting(on)
 
@@ -499,22 +511,22 @@ func _apply_hud_insets() -> void:
 	# 可用宽度按比例分给两块面板：左边拿大头（关卡文字更长），右边保证最小可读宽度
 	var avail: float = maxf(vp.x - sl - sr, 120.0)
 	var gap: float = 12.0
-	var lw: float = clampf(minf(LEFT_PANEL_W, (avail - gap) * 0.56), 120.0, LEFT_PANEL_W)
-	var rw: float = clampf(minf(RIGHT_PANEL_W, avail - gap - lw), 92.0, RIGHT_PANEL_W)
+	var lw: float = clampf(minf(LEFT_PANEL_W, (avail - gap) * 0.45), 96.0, LEFT_PANEL_W)
+	var rw: float = clampf(minf(RIGHT_PANEL_W, avail - gap - lw), 96.0, RIGHT_PANEL_W)
 	var narrow: bool = vp.x < 620.0
 	# 窄屏同时缩小字号 + 缩短文案（宁可信息少一点，也不要溢出错行）
-	level_label.add_theme_font_size_override("font_size", 16 if narrow else 21)
-	moves_label.add_theme_font_size_override("font_size", 16 if narrow else 21)
-	best_label.add_theme_font_size_override("font_size", 11 if narrow else 13)
+	level_label.add_theme_font_size_override("font_size", 17 if narrow else 19)
+	moves_label.add_theme_font_size_override("font_size", 19 if narrow else 21)
+	best_label.add_theme_font_size_override("font_size", 11 if narrow else 12)
 	_hud_narrow = narrow
 	left_panel.offset_left = sl
 	left_panel.offset_right = sl + lw
 	left_panel.offset_top = st
-	left_panel.offset_bottom = st + 78.0
+	left_panel.offset_bottom = st + PANEL_H
 	right_panel.offset_left = -sr - rw
 	right_panel.offset_right = -sr
 	right_panel.offset_top = st
-	right_panel.offset_bottom = st + 78.0
+	right_panel.offset_bottom = st + PANEL_H
 	_update_hud()
 
 
@@ -526,6 +538,8 @@ func _setup_touch_controls() -> void:
 	touch_controls.restart_pressed.connect(_on_touch_restart)
 	touch_controls.select_pressed.connect(_open_level_select)
 	touch_controls.replay_pressed.connect(_on_touch_replay)
+	# 方向键是玩家偏好（默认关）：启动时就按他的选择摆好
+	touch_controls.set_pad_enabled(progress != null and progress.pad_enabled())
 	_touch_active = _touch_wanted()
 	_apply_touch_visibility()
 
@@ -624,6 +638,10 @@ func _refresh_bands() -> void:
 			# 底部控件（含其自身的安全区占位）之上
 			occupied = maxf(occupied, touch_controls.bottom_inset())
 		y = vp.y - occupied - 10.0
+	if touch_on:
+		# 触屏：静态帮助文案整条撤掉（见上）。状态提示仍由 _refresh_bands 定位。
+		help_label.text = ""
+		help_label.visible = false
 	for l in [help_label, win_label, fail_label, replay_label]:
 		if l == null:
 			continue
@@ -643,13 +661,15 @@ func _refresh_bands() -> void:
 			l.offset_bottom = y - vp.y
 	var base: String
 	if touch_on:
-		# 与「手势提示」分工：这里说按钮，提示条说滑动手势（早期两条文案说的是同一件事，
-		# 屏幕上却出现两行几乎一样的字）。
-		# 窄屏只留最要紧的一条（坠落规则）——按钮本身已经写着字，不需要再列一遍。
-		if vp.x < 620.0:
-			base = "掉出棋盘或落入空洞会坠落"
-		else:
-			base = "掉出棋盘或落入空洞会坠落　·　右下：重开 / 选关 / 回放"
+		# 触屏**不再常驻任何操作文案**：
+		#   · 按钮上已经写着「重开 / 选关 / 回放」，再列一遍是重复（真机反馈：屏幕太满）
+		#   · 滑动手势由第一次进关卡的手势提示负责教，学会就收起
+		# 这条带子从此只承担**状态变化**（坠落 / 通关 / 回放 / 挑战）——
+		# 也就是玩家真的需要被告知的那一刻。
+		base = ""
+		help_label.text = base
+		help_label.visible = false
+		return
 	elif _is_tv_like():
 		# 电视遥控器上没有 R / L / V，写了等于没写 —— 只提示真正可用的键
 		base = "遥控器方向键移动　·　确认重开或继续　·　返回选关　·　掉出棋盘或落入空洞会坠落"
@@ -832,6 +852,7 @@ func _setup_level_select() -> void:
 	level_select.reset_requested.connect(_on_progress_reset)
 	level_select.celebration_requested.connect(_on_celebration_requested)
 	level_select.ghost_toggled.connect(_on_ghost_toggled)
+	level_select.pad_toggled.connect(_on_pad_toggled)
 	level_select.share_requested.connect(_on_share_requested)
 
 
@@ -1108,22 +1129,18 @@ func _on_fell() -> void:
 func _update_hud() -> void:
 	if levels.is_empty():
 		return
-	var done: int = progress.completed_count() if progress != null else 0
-	if _hud_narrow:
-		level_label.text = "第 %d 关　%d/%d" % [current_index + 1, done, levels.size()]
-	else:
-		# 重玩一轮时改成「本轮」：否则刚「再玩一遍」会看到已通关从 20 掉到 0，
-		# 像是进度被删了（其实只是本轮重新计，记录与解锁都还在）
-		var tag: String = "本轮" if progress.replay_round() else "已通关"
-		level_label.text = "第 %d 关　·　%s %d / %d" % [current_index + 1, tag, done, levels.size()]
-	progress_bar.max_value = float(levels.size())
-	# 进度条表示**整体通关进度**，而不是“当前第几关”：
-	# 跳到第 18 关时看到 18/20 会让人误以为快通关了，实际上只通了 3 关。
-	progress_bar.value = float(done)
+	# 游戏画面上只留「第 N 关」。
+	# 通关进度（已通关 x/20、进度条、本轮/历史口径）全部搬到选关界面：
+	#   · 它不影响当前这一局怎么玩，却占了左上角一整块
+	#   · 口径还很绕（本轮 vs 曾经通关），放在需要读的地方（选关）才讲得清
+	level_label.text = "第 %d 关" % [current_index + 1]
 	if challenge_label != null:
 		challenge_label.visible = challenge_active()
 		if challenge_active():
 			challenge_label.text = Share.challenge_line(int(_challenge["level"]), int(_challenge.get("moves", -1)))
+	# 「回放」按钮只在本关**确实有回放记录**时出现（没有记录就不留死按钮）
+	if touch_controls != null:
+		touch_controls.set_replay_available(progress.has_replay(_level_key(current_index)))
 	moves_label.text = "步数  %d" % game.move_count
 	_update_clock_label(true)
 
@@ -1148,7 +1165,8 @@ func _update_hud() -> void:
 	var bt: int = progress.best_time(key)
 	if bt >= 0:
 		lines.append("最快 %s" % Leaderboard.format_clock(bt))
-	best_label.text = "\n".join(lines) if lines.size() > 0 else "　"
+	# 最佳 / 参考合并成**一行**：它们是同一个用途（刷分目标），分两行只是占高度
+	best_label.text = "　·　".join(lines) if lines.size() > 0 else "　"
 
 
 func _wait_for_anim() -> void:
@@ -1379,19 +1397,6 @@ func _setup_hud() -> void:
 	challenge_label.add_theme_color_override("font_color", Color(0.55, 1.0, 0.78))
 	challenge_label.visible = false
 	col.add_child(challenge_label)
-	progress_bar = ProgressBar.new()
-	progress_bar.custom_minimum_size = Vector2(0, 8)
-	progress_bar.show_percentage = false
-	progress_bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var sb_bg := StyleBoxFlat.new()
-	sb_bg.bg_color = Color(1, 1, 1, 0.14)
-	sb_bg.set_corner_radius_all(4)
-	var sb_fill := StyleBoxFlat.new()
-	sb_fill.bg_color = Color(0.36, 0.86, 0.58)
-	sb_fill.set_corner_radius_all(4)
-	progress_bar.add_theme_stylebox_override("background", sb_bg)
-	progress_bar.add_theme_stylebox_override("fill", sb_fill)
-	col.add_child(progress_bar)
 	left.add_child(col)
 
 	# ── 右上：步数 ──────────────────────────────────

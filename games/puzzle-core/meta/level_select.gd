@@ -18,6 +18,7 @@ signal level_chosen(index: int)
 signal closed
 signal reset_requested
 signal ghost_toggled(on: bool)
+signal pad_toggled(on: bool)
 signal share_requested(index: int)
 signal celebration_requested   # 「回顾通关」：全部通关后想再看一次庆祝动画
 
@@ -49,8 +50,10 @@ var _margin: MarginContainer = null
 var _hint: Label
 var _reset_btn: Button
 var _ghost_btn: Button
+var _pad_btn: Button
 var _share_btn: Button
 var _ghost_on: bool = false
+var _pad_on: bool = false
 var _back_btn: Button
 var _celebrate_btn: Button
 var touch_mode: bool = false   # 由 main 设置：触屏下提示文案与按钮尺寸要适配
@@ -171,6 +174,18 @@ func _ready() -> void:
 	_ghost_btn.pressed.connect(_on_ghost_pressed)
 	row.add_child(_ghost_btn)
 
+	# 方向键开关：手势是主要输入，方向键是"备选操作方式"。
+	# 放在选关界面而不是游戏画面里 —— 游戏画面上的每一样东西都必须是常用的。
+	_pad_btn = Button.new()
+	_pad_btn.text = "方向键: 关"
+	_pad_btn.flat = true
+	_pad_btn.focus_mode = Control.FOCUS_NONE
+	_pad_btn.add_theme_font_size_override("font_size", 14)
+	_pad_btn.add_theme_color_override("font_color", FG_DIM)
+	_pad_btn.add_theme_color_override("font_hover_color", Color(0.72, 0.90, 1.0))
+	_pad_btn.pressed.connect(_on_pad_pressed)
+	row.add_child(_pad_btn)
+
 	_reset_btn = Button.new()
 	_reset_btn.text = "重置进度"
 	_reset_btn.flat = true
@@ -198,6 +213,7 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 			and p_progress.completed_count() >= entries.size()
 	if p_progress != null:
 		set_ghost_state(p_progress.ghost_enabled())
+		set_pad_state(p_progress.pad_enabled())
 
 	for c in _cards:
 		_grid.remove_child(c)
@@ -440,6 +456,23 @@ func set_ghost_state(on: bool) -> void:
 	_ghost_on = on
 	if _ghost_btn != null:
 		_ghost_btn.text = ghost_button_text()
+
+
+func pad_button_text() -> String:
+	# 与影子同款：文字直接说清当前状态（"开/关"比一个开关图标更不容易误读）
+	return "方向键: " + ("开" if _pad_on else "关")
+
+
+func set_pad_state(on: bool) -> void:
+	_pad_on = on
+	if _pad_btn != null:
+		_pad_btn.text = pad_button_text()
+
+
+func _on_pad_pressed() -> void:
+	_pad_on = not _pad_on
+	set_pad_state(_pad_on)
+	pad_toggled.emit(_pad_on)
 
 
 func _on_ghost_pressed() -> void:

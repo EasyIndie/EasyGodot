@@ -15,7 +15,9 @@
 #      meta/gesture_tracker.gd 里（纯逻辑、可逐个角度断言）。这里只负责
 #      把输入事件喂进去、把结果转成信号，并做视觉反馈。
 #
-#  2) **D-pad 摆在四角、用对角箭头**（↖↗↙↘），
+#  2) **默认不显示 D-pad**：手势才是主要输入，屏幕上少一块按钮，棋盘就多一块。
+#     方向键是"备选操作方式"，在选关界面里可以打开（记在进度里，开一次就一直有）。
+#     打开时它摆在四角、用对角箭头（↖↗↙↘），
 #     让「按钮位置 / 箭头方向 / 方块去向」三者一致。
 #
 #  3) 每个功能都必须有**可点的入口**。（选关界面曾经只能靠 Esc 关闭，
@@ -27,8 +29,10 @@
 #  5) 触屏是“指向性”输入但**看不见规则**，所以第一次进关卡要给一次
 #     手势方向提示（对角线），并随第一次成功移动自动收起。
 #
-#  6) 拖动要有**实时反馈**：手指附近显示"当前指向 + 已滑多少"（快满时亮起），
-#     方向键同步闪一下。触屏没有光标，不给反馈玩家不知道自己有没有滑对。
+#  6) **不做拖动指示器**。曾经在手指旁画过一个"当前指向的箭头"，
+#     真机反馈是"多余"：方块本身就是最直接的反馈 —— 滑对了它立刻滚，
+#     滑错了它不动，玩家不需要再看一个小箭头。屏幕上的每一样东西都要挣得它的位置。
+#     （方向键打开时命中会闪一下，那是按钮自身的反馈，不占额外空间。）
 #
 #  7) **一次手势至多一步移动**（滑过阈值立刻判定，不等抬手；判定后本手势作废）。
 #     曾经做成"像摇杆一样连滚"，真机反馈是「滑一次会滚很多次」——
@@ -75,11 +79,12 @@ const HINT_TIME := 6.0   # 提示自动收起时间（秒）
 
 var _root: Control
 var _pad: GridContainer
-var _actions: VBoxContainer
+var _actions: HBoxContainer
 var _hint: PanelContainer
 var _hint_label: Label
 var _dir_buttons: Array = []
 var _action_buttons: Array = []
+var _replay_button: Button = null
 var _unit: float = 64.0
 var _screen_dirs: Dictionary = {}   # 由 main.gd 用相机 unproject 现算后注入
 var _insets: Dictionary = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
@@ -90,7 +95,8 @@ var _drag_moved: bool = false  # 已超出"点按"范围 → 事件不再交给�
 var _drag_pos: Vector2 = Vector2.ZERO   # 最近一次拖动位置（反馈/查询用）
 var _btn_dirs: Array = []      # 与 _dir_buttons 一一对应的方向
 var _flash: Dictionary = {}    # 方向 → 剩余闪烁时长
-var _drag_dot: Label = null    # 手指旁的拖动指示
+var _pad_enabled: bool = false # D-pad 默认关闭（手势优先；可在选关界面开启）
+var _replay_available: bool = false   # 本关有回放记录时才显示「回放」
 var _hint_done: bool = false
 var _hint_timer: float = 0.0
 var _replay_playing: bool = false
@@ -134,7 +140,9 @@ func _ready() -> void:
 			_dir_buttons.append(b)
 			_btn_dirs.append(d)
 
-	_actions = VBoxContainer.new()
+	# 动作按钮：**一排小胶囊**，只放当前真正用得上的那几个。
+	# 竖排三大块会占掉右下角一整片（在竖屏手机上横扫棋盘）；一行只占一条边。
+	_actions = HBoxContainer.new()
 	_actions.add_theme_constant_override("separation", 8)
 	_actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(_actions)
@@ -150,20 +158,14 @@ func _ready() -> void:
 		b.pressed.connect(func() -> void: emit_signal(sig))
 		_actions.add_child(b)
 		_action_buttons.append(b)
+		# 「回放」只在本关**确实有回放记录**时才出现：没有记录就没有按钮，
+		# 界面上不留一个永远点不动的死按钮。
+		if str(spec[0]) == ACTION_REPLAY:
+			_replay_button = b
+			b.visible = false
 
 	# 手势提示：一条会自己收起的窄条。触屏玩家不知道“对角线滑动”这套规则，
 	# 光有 D-pad 也说明不了「滑动方向 = 方块去向」。
-	# 拖动指示：跟着手指的一个小箭头 + 进度环。触屏没有光标，
-	# 玩家需要一个"我看到你在往哪滑"的确认，否则不知道自己有没有滑对。
-	_drag_dot = Label.new()
-	_drag_dot.visible = false
-	_drag_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_drag_dot.add_theme_font_size_override("font_size", 30)
-	_drag_dot.add_theme_color_override("font_color", Color(1.0, 1.0, 1.0, 0.95))
-	_drag_dot.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.55))
-	_drag_dot.add_theme_constant_override("shadow_offset_x", 0)
-	_drag_dot.add_theme_constant_override("shadow_offset_y", 2)
-	_root.add_child(_drag_dot)
 
 	_hint = PanelContainer.new()
 	_hint.visible = false
@@ -211,8 +213,11 @@ func safe_insets() -> Dictionary:
 
 
 func bottom_inset() -> float:
-	# 底部被控件（含安全区）占用的高度，供 HUD 提示带避让
-	return _unit * 3.0 + _unit * 0.68 + float(_insets.get("bottom", 0.0))
+	# 底部被控件（含安全区）占用的高度，供 HUD 提示带避让。
+	# 数字键与动作胶囊并排，所以取两者更高的那个（不是相加）。
+	var pad: float = _unit * 3.0 if _pad_enabled else 0.0
+	var bh: float = clampf(_unit * 0.68, 44.0, 72.0)
+	return maxf(pad, bh) + float(_insets.get("bottom", 0.0)) + 24.0
 
 
 func set_screen_dirs(dirs: Dictionary) -> void:
@@ -263,6 +268,33 @@ func is_replay_playing() -> bool:
 	return _replay_playing
 
 
+func set_pad_enabled(on: bool) -> void:
+	# 方向键是"备选操作方式"：默认关，玩家在选关界面里开（选择会被记住）
+	_pad_enabled = on
+	_apply_layout()
+
+
+func pad_enabled() -> bool:
+	return _pad_enabled
+
+
+func pad_visible() -> bool:
+	return _pad != null and _pad.visible
+
+
+func set_replay_available(on: bool) -> void:
+	# 本关有没有回放记录 → 决定「回放」按钮出不出现
+	if _replay_button == null:
+		return
+	_replay_available = on
+	_replay_button.visible = on
+	_apply_layout()
+
+
+func replay_available() -> bool:
+	return _replay_available
+
+
 func show_swipe_hint() -> void:
 	# 每次进入关卡给一次提示，但**每局游戏只给一次**：
 	# 反复弹提示会变成噪音，玩家学会之后就不需要了。
@@ -305,7 +337,23 @@ func layout_info() -> Dictionary:
 		"actions": {"pos": _actions.position, "size": _actions.size},
 		"hint": {"pos": _hint.position, "size": _hint.size},
 		"insets": _insets.duplicate(),
+		# 供测试断言"界面上到底有几样东西"：多加一个控件就该有人问为什么
+		"ui_children": ui_child_names(),
+		"pad_visible": pad_visible(),
+		"replay_visible": _replay_button != null and _replay_button.visible,
 	}
+
+
+func ui_child_names() -> Array:
+	# 触屏层的全部界面元素（**就这几样**：方向键盘、动作胶囊、手势提示）。
+	# 这条不变量是有意的：屏幕上每多一样东西，棋盘就少一点呼吸空间。
+	var out: Array = []
+	if _root == null:
+		return out
+	for c in _root.get_children():
+		out.append(str(c.name))
+	out.sort()
+	return out
 
 
 # ── 布局 ───────────────────────────────────────────────
@@ -322,23 +370,40 @@ func _apply_layout() -> void:
 	var sb: float = float(_insets.get("bottom", 0.0))
 	var st: float = float(_insets.get("top", 0.0))
 
-	# 左下：D-pad（菱形四角）
+	# 左下：D-pad（默认隐藏；打开时仍是菱形四角的对角箭头）
+	_pad.visible = _pad_enabled
 	_pad.position = Vector2(sl + margin, vp.y - sb - pad - margin)
 	_pad.size = Vector2(pad, pad)
 	for b in _dir_buttons:
 		b.custom_minimum_size = Vector2(_unit, _unit)
 		b.add_theme_font_size_override("font_size", int(_unit * 0.46))
 
-	# 右下：动作按钮竖排（拇指自然落点，且不与 D-pad 抢空间）
-	var bw: float = _unit * 1.85
-	var bh: float = _unit * 0.74
-	var sep: float = 8.0
+	# 右下：一排小胶囊（选关 / 重开 / 有回放时的回放）。
+	# 每个按钮的高度就是"拇指落点"，所以下限钉在 44（约 44pt），上限别太大。
+	var visible_actions: Array = []
+	for b in _action_buttons:
+		if b.visible:
+			visible_actions.append(b)
+	var bh: float = clampf(_unit * 0.68, 44.0, 72.0)
+	var bw: float = bh * 1.55
+	var sep: float = maxf(_unit * 0.16, 8.0)
 	for b in _action_buttons:
 		b.custom_minimum_size = Vector2(bw, bh)
-		b.add_theme_font_size_override("font_size", int(_unit * 0.30))
-	var ah: float = bh * float(_action_buttons.size()) + sep * float(maxi(_action_buttons.size() - 1, 0))
-	_actions.size = Vector2(bw, ah)
-	_actions.position = Vector2(vp.x - sr - bw - margin, vp.y - sb - ah - margin)
+		b.add_theme_font_size_override("font_size", int(bh * 0.36))
+	var n: int = maxi(visible_actions.size(), 1)
+	var aw: float = bw * float(n) + sep * float(n - 1)
+	# 一行放不下（极窄屏 + 三个按钮）→ 按总宽缩字号与按钮宽，绝不换行堆高
+	var avail_w: float = vp.x - sl - sr - margin * 2.0
+	if aw > avail_w and aw > 1.0:
+		var k: float = avail_w / aw
+		bw = maxf(bw * k, 40.0)
+		bh = maxf(bh * k, 40.0)
+		aw = bw * float(n) + sep * float(n - 1)
+		for b in _action_buttons:
+			b.custom_minimum_size = Vector2(bw, bh)
+			b.add_theme_font_size_override("font_size", int(maxf(bh * 0.36, 11.0)))
+	_actions.size = Vector2(aw, bh)
+	_actions.position = Vector2(vp.x - sr - margin - aw, vp.y - sb - margin - bh)
 
 	# 手势提示：**左对齐在 D-pad 正上方**。
 	# 早先横屏时把它水平居中，结果正好落在棋盘中央，把棋盘和目标格都盖住了 ——
@@ -355,7 +420,10 @@ func _apply_layout() -> void:
 		_hint_label.add_theme_font_size_override("font_size", int(fs))
 		hs = _hint.get_combined_minimum_size()
 	_hint.size = Vector2(minf(hs.x, max_w), hs.y)
-	var hint_y: float = vp.y - sb - pad - margin - hs.y - 10.0
+	# 提示条：贴着左下角（方向键那个位置）。方向键开着时抬到它上方。
+	# 为什么不做水平居中：横屏时正中就是棋盘，提示会把棋盘和目标格都盖住。
+	var above: float = (pad + margin + 10.0) if _pad_enabled else 0.0
+	var hint_y: float = vp.y - sb - margin - above - hs.y
 	_hint.position = Vector2(sl + margin, maxf(hint_y, st + 8.0))
 
 
@@ -407,7 +475,6 @@ func drag_begin(pos: Vector2) -> void:
 	_drag_begin = pos
 	_drag_pos = pos
 	_drag_moved = false
-	_show_drag_dot(pos)
 
 
 # 返回本次是否触发了一次移动（并已通过 direction 信号发出）
@@ -424,7 +491,6 @@ func drag_move(pos: Vector2) -> bool:
 			vp.set_input_as_handled()
 	_drag_pos = pos
 	var d: Vector3i = _tracker.feed(pos)
-	_update_drag_dot(pos)
 	if d != Vector3i.ZERO:
 		_emit_dir(d)
 		return true
@@ -434,7 +500,7 @@ func drag_move(pos: Vector2) -> bool:
 func drag_end() -> void:
 	if _tracker != null:
 		_tracker.cancel()
-	_hide_drag_dot()
+
 
 
 func _emit_dir(d: Vector3i) -> void:
@@ -480,39 +546,8 @@ func _input(event: InputEvent) -> void:
 
 # ── 视觉反馈 ───────────────────────────────────────────
 
-func _show_drag_dot(pos: Vector2) -> void:
-	if _drag_dot == null:
-		return
-	# 放在手指**上方偏左**：手指本身会遮住触点，指示器必须在旁边才看得见
-	_drag_dot.position = pos + Vector2(6.0, -_unit * 0.86)
-	_drag_dot.visible = true
-	_drag_dot.modulate = Color(1, 1, 1, 0.0)
-
-
-func _update_drag_dot(pos: Vector2) -> void:
-	# 指示要显示**当前指向**（peek），不是"已经触发的方向" ——
-	# 后者在没滑够时是 ZERO，会让指示永远不亮（而方向其实是对的，
-	# 只看逻辑测试发现不了，得截图才看得出来）。
-	if _drag_dot == null or not _drag_dot.visible:
-		return
-	var d: Vector3i = _tracker.peek(pos) if _tracker != null else Vector3i.ZERO
-	if d == Vector3i.ZERO:
-		_drag_dot.modulate = Color(1, 1, 1, 0.0)
-		return
-	_drag_dot.text = str(GLYPH.get(d, ""))
-	# 透明度随"距触发还差多少"上升：快满时亮起，玩家能感到"再多滑一点就动"
-	var r: float = drag_ratio(pos) if _tracker != null else 0.0
-	_drag_dot.modulate = Color(1.0, 1.0, 1.0, lerpf(0.16, 1.0, r))
-	_drag_dot.scale = Vector2.ONE * lerpf(0.86, 1.18, r)
-
-
-func _hide_drag_dot() -> void:
-	if _drag_dot != null:
-		_drag_dot.visible = false
-
-
 func _update_flash(delta: float) -> void:
-	if _flash.is_empty() and _drag_dot == null:
+	if _flash.is_empty():
 		return
 	# 先老化再应用：闪烁只影响颜色，不改变按钮的可用状态
 	for d in _flash.keys():
