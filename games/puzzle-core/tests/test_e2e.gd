@@ -55,6 +55,7 @@ func _run() -> void:
 	await _test_ghost()
 	await _test_challenge()
 	await _test_mechanism_render()
+	await _test_mvp_flow()
 	ProjectSettings.set_setting("puzzle/progress_path", "")
 	_remove_tmp(SUITE_SAVE)
 	_report_and_quit()
@@ -1323,6 +1324,7 @@ func _test_ending() -> void:
 	scene.ending.close()
 	scene._do_load(0)
 	scene._run_moves = ["right"]
+	scene.game.won_flag = true
 	await scene._on_won()
 	check(not scene.ending.is_open(), "全部通关后再打通单关不应重复弹出庆祝动画")
 	check(scene.transitioning or scene.current_index != 0, "应走普通换关流程")
@@ -1401,6 +1403,73 @@ func _test_ending() -> void:
 	await create_timer(0.3).timeout
 	scene.free()
 	_remove_tmp(tmp)
+
+
+func _test_mvp_flow() -> void:
+	var path := "user://test_mvp_flow.json"
+	_remove_tmp(path)
+	ProjectSettings.set_setting("puzzle/progress_path", path)
+	var saved = Progress.new(path)
+	saved.record_win("level_01", ["up", "up"])
+	saved.set_current_level("level_02")
+	var scene = load("res://scenes/main.tscn").instantiate()
+	root.size = Vector2i(390, 844)
+	root.add_child(scene)
+	await process_frame
+	scene.game.animate = false
+	check(scene.current_index == 1, "重新进入游戏应续玩第 2 关")
+	check(scene.lesson_label.visible and scene.lesson_label.text.contains("竖立"), "未完成的入门关解释胜利条件")
+	check(scene.lesson_label.size.x <= 390.0 and scene.lesson_label.position.y >= 70.0, "教学提示在窄屏内并避开 HUD")
+	scene._touch_active = true
+	scene._query_string = "?touch=1"
+	scene._apply_touch_visibility()
+	scene.game.lost_flag = true
+	check(scene.back_action() == "open_select", "失败后返回仍可打开选关")
+	scene._open_level_select()
+	check(scene.level_select.is_open(), "失败后选关入口不会把玩家困住")
+	for size in [Vector2i(360, 800), Vector2i(844, 390), Vector2i(768, 1024)]:
+		root.size = size
+		scene.level_select.set_safe_insets({"left": 24.0, "right": 24.0, "top": 12.0, "bottom": 20.0})
+		await process_frame
+		await process_frame
+		var board_center := Vector3(float(scene.game.board.grid_x) / 2.0, 0.0, float(scene.game.board.grid_z) / 2.0)
+		var fit = preload("res://meta/ui_layout.gd").camera_distance(float(maxi(scene.game.board.grid_x, scene.game.board.grid_z)), float(size.x) / float(size.y), scene.cam.fov)
+		check(absf(scene.cam.position.distance_to(board_center) - fit) < 0.01, "旋转屏幕后应重新取景，不保留竖屏的远距离")
+		var bounds: Rect2 = scene.level_select._content.get_global_rect()
+		check(bounds.position.x >= 24.0 and bounds.end.x <= size.x - 24.0,
+			"选关内容在 %s 下应留在安全区内" % str(size))
+		check(scene.level_select.back_button().size.y >= 44.0, "触屏返回按钮至少 44 高")
+	root.size = Vector2i(390, 844)
+	scene.level_select.set_safe_insets({"left": 0.0, "right": 0.0, "top": 0.0, "bottom": 0.0})
+	scene.level_select.close()
+	scene._do_load(0)
+	check(not scene.lesson_label.visible, "已通关关卡不重复规则教学")
+	scene._do_load(12)
+	check(scene.lesson_text().contains("传送"), "首次玩传送门关卡说明姿态规则")
+	scene._do_load(15)
+	check(scene.lesson_text().contains("开关"), "首次玩桥关卡说明通路顺序")
+	scene._lesson_left = 0.01
+	scene._process(0.02)
+	check(not scene.lesson_label.visible, "规则提示自动收起，不常驻遮挡棋盘")
+	# 通关反馈尚未结束时重开：旧协程不能稍后切走新局面。
+	scene._do_load(0)
+	scene._run_moves = ["up", "up"]
+	scene.game.won_flag = true
+	scene._on_won()
+	scene._do_load(0)
+	await create_timer(0.9).timeout
+	check(scene.current_index == 0 and not scene.transitioning, "通关后立刻重开不会被旧流程自动切关")
+	# 通关后进菜单：尊重玩家选择，避免菜单上方又出现换关动画。
+	scene.game.won_flag = true
+	scene._run_moves = ["up", "up"]
+	scene._on_won()
+	scene._open_level_select()
+	await create_timer(0.9).timeout
+	check(scene.level_select.is_open() and not scene.transitioning, "通关后打开菜单取消自动换关")
+	scene.free()
+	_remove_tmp(path)
+	ProjectSettings.set_setting("puzzle/progress_path", SUITE_SAVE)
+	root.size = Vector2i(1280, 720)
 
 
 func _test_move_animation_geometry() -> void:

@@ -60,6 +60,10 @@ var touch_mode: bool = false   # 由 main 设置：触屏下提示文案与按�
 var _confirm_reset: bool = false
 var _confirm_timer: float = 0.0
 var _current: int = 0
+var _content: VBoxContainer
+var _center: CenterContainer
+var _privacy: AcceptDialog
+var _scroll: ScrollContainer
 
 
 func _ready() -> void:
@@ -80,12 +84,21 @@ func _ready() -> void:
 	_margin = margin
 	add_child(margin)
 
+	var scroll := ScrollContainer.new()
+	_scroll = scroll
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.follow_focus = true
+	margin.add_child(scroll)
 	var center := CenterContainer.new()
+	_center = center
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	center.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	center.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	margin.add_child(center)
+	scroll.add_child(center)
 
 	var box := VBoxContainer.new()
+	_content = box
 	box.add_theme_constant_override("separation", 10)
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(box)
@@ -99,6 +112,7 @@ func _ready() -> void:
 	_title = title
 
 	_subtitle = Label.new()
+	_subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_subtitle.add_theme_font_size_override("font_size", 16)
 	_subtitle.add_theme_color_override("font_color", FG_OPT)
@@ -111,12 +125,14 @@ func _ready() -> void:
 	box.add_child(_grid)
 
 	_detail = Label.new()
+	_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_detail.add_theme_font_size_override("font_size", 14)
 	_detail.add_theme_color_override("font_color", FG_OPT)
 	box.add_child(_detail)
 
 	_hint = Label.new()
+	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hint.add_theme_font_size_override("font_size", 14)
 	_hint.add_theme_color_override("font_color", FG_DIM)
@@ -125,9 +141,10 @@ func _ready() -> void:
 	# 底部按钮行。
 	# **必须有可点的「返回」**：桌面靠 Esc，但触屏没有键盘，
 	# 之前只能进不能出，整个选关页面就变成了死胡同。
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 14)
+	var row := HFlowContainer.new()
+	row.alignment = FlowContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("h_separation", 12)
+	row.add_theme_constant_override("v_separation", 8)
 	box.add_child(row)
 
 	_back_btn = Button.new()
@@ -196,6 +213,24 @@ func _ready() -> void:
 	_reset_btn.pressed.connect(_on_reset_pressed)
 	row.add_child(_reset_btn)
 
+	var privacy_btn := Button.new()
+	privacy_btn.text = "隐私政策"
+	privacy_btn.flat = true
+	privacy_btn.custom_minimum_size.y = 44.0
+	privacy_btn.pressed.connect(func() -> void: _privacy.popup_centered_clamped(Vector2i(340, 330), 0.85))
+	box.add_child(privacy_btn)
+	_privacy = AcceptDialog.new()
+	_privacy.title = "隐私政策"
+	_privacy.dialog_autowrap = true
+	_privacy.dialog_text = "本机保存进度、成绩、回放和偏好；游戏不上传记录。\n\n无账号、广告或追踪 SDK。\n\n可重置进度删除记录。分享由你主动发送。\n\n完整政策、Web 访问日志说明与支持见在线页面。"
+	_privacy.get_label().autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
+	_privacy.get_ok_button().text = "关闭"
+	_privacy.add_button("在线政策", false, "policy")
+	_privacy.custom_action.connect(func(action: String) -> void:
+		if action == "policy":
+			OS.shell_open("https://easyindie.github.io/EasyGodot/privacy.html"))
+	add_child(_privacy)
+
 	get_viewport().size_changed.connect(_apply_layout)
 
 
@@ -234,6 +269,8 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 	visible = true
 	if _cards.size() > 0:
 		_cards[clampi(_current, 0, _cards.size() - 1)].grab_focus()
+	if _current == 0:
+		_scroll.set_deferred("scroll_vertical", 0)
 
 
 func close() -> void:
@@ -300,7 +337,7 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 
 	var shape := Label.new()
 	# 形状名统一走注册表，这里不再有任何 if id == ...（加形状只需改 core/shapes.gd）
-	shape.text = Shapes.display_name(str(entry.get("shape", "domino")))
+	shape.text = str(entry.get("title", Shapes.display_name(str(entry.get("shape", "domino")))))
 	shape.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shape.add_theme_font_size_override("font_size", 11)
 	shape.add_theme_color_override("font_color", FG_DIM)
@@ -348,11 +385,15 @@ func _apply_layout() -> void:
 	var vp: Vector2 = get_viewport().get_visible_rect().size
 	# 避开安全区：把 inset 转成内容边距，而不是把控件硬挪（否则会与居中布局打架）
 	if _margin != null:
-		_margin.add_theme_constant_override("margin_left", int(float(_insets.get("left", 0.0))))
-		_margin.add_theme_constant_override("margin_right", int(float(_insets.get("right", 0.0))))
-		_margin.add_theme_constant_override("margin_top", int(float(_insets.get("top", 0.0))))
-		_margin.add_theme_constant_override("margin_bottom", int(float(_insets.get("bottom", 0.0))))
-	var g: Dictionary = UiLayout.level_grid(vp, maxi(_entries.size(), 1))
+		_margin.add_theme_constant_override("margin_left", int(float(_insets.get("left", 0.0))) + 12)
+		_margin.add_theme_constant_override("margin_right", int(float(_insets.get("right", 0.0))) + 12)
+		_margin.add_theme_constant_override("margin_top", int(float(_insets.get("top", 0.0))) + 12)
+		_margin.add_theme_constant_override("margin_bottom", int(float(_insets.get("bottom", 0.0))) + 12)
+	var available: Vector2 = vp - Vector2(float(_insets.get("left", 0.0)) + float(_insets.get("right", 0.0)) + 24.0,
+		float(_insets.get("top", 0.0)) + float(_insets.get("bottom", 0.0)) + 24.0)
+	_content.custom_minimum_size.x = minf(maxf(available.x * 0.94, 0.0), 608.0)
+	_center.custom_minimum_size.x = maxf(available.x, 0.0)
+	var g: Dictionary = UiLayout.level_grid(available, maxi(_entries.size(), 1))
 	_grid.columns = int(g["columns"])
 	var card: Vector2 = g["card"]
 	for i in range(_cards.size()):
@@ -372,7 +413,9 @@ func _apply_layout() -> void:
 	else:
 		_hint.text = "← → ↑ ↓ 选择     Enter / 点击 开始     Esc 返回"
 	# 按钮：触屏要够大好点（高度按视口自适应，并留出最小可点面积）
-	var btn_h: float = clampf(vp.y * 0.055, 34.0, 52.0)
+	var btn_h: float = clampf(vp.y * 0.055, 44.0 if touch_mode else 34.0, 52.0)
+	for button in [_share_btn, _ghost_btn, _pad_btn]:
+		button.custom_minimum_size.y = btn_h
 	_back_btn.custom_minimum_size = Vector2(btn_h * 3.4, btn_h)
 	_back_btn.add_theme_font_size_override("font_size", int(btn_h * 0.42))
 	_celebrate_btn.custom_minimum_size = Vector2(btn_h * 2.9, btn_h)

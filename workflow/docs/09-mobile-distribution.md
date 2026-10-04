@@ -1,5 +1,8 @@
 # 09 · 移动端发布（Android / iOS）
 
+> **2026-10-04 更新：先完成 Web 电脑/手机验收，再发布 Android 与 iOS。当前任务以 [11 首发计划](11-first-release-plan.md) 为准。**
+> 下方早期出包结果属于历史记录，不代表本次候选已完成签名、真机或商店验收。
+
 > 决策背景：Steam 是 **$100/款**；iOS 年费已有账号；Android 技术与成本都低。
 > 所以本阶段的主渠道改为 **Android + iOS 应用商店**（见
 > [`08-platform-and-market-research.md`](08-platform-and-market-research.md) 的费用与竞品调研）。
@@ -24,7 +27,7 @@
 | Android 构建 | ✅ **已跑通**（APK 55MB 装真机/模拟器；AAB 51MB 可上架，签名已用 `jarsigner` 验证） |
 | iOS 构建 | ⏳ **必须有 macOS**（本文 §2） |
 | 上架素材与商店后台 | ⏳ 需要你操作（本文 §3） |
-| 内容量（20 关 vs 竞品 200 关） | ⚠️ **上架前要扩**（本文 §5） |
+| 内容量 | 首发先精选 20 关，以试玩趣味性验收，不设竞品关数门槛 |
 
 ---
 
@@ -149,7 +152,7 @@ Godot 官方文档原话：
 2. 在 `export_presets.cfg` 里填 `application/app_store_team_id`（Apple Developer 的 10 位 Team ID）
 3. 确保 App ID 已在 Apple Developer 后台注册（bundle id = `com.easyindie.puzzlecore`）
 4. 签名用 Xcode 的自动管理（Godot 导出时留空 code sign identity / provisioning 即可）
-5. `workflow/scripts/gf-export.sh games/puzzle-core ios` → 产出 `.ipa`
+5. `workflow/scripts/gf-export.sh games/puzzle-core ios`：签名配置齐备时导出；如需人工完成 Archive，先导出 Xcode 项目再用 Xcode 签名归档，不把导出命令成功等同于可上传
 6. 用 Transporter / `xcrun altool` / Xcode 上传到 App Store Connect → TestFlight 内测
 
 ---
@@ -169,7 +172,7 @@ Godot 官方文档原话：
 | 数据安全表单 | 声明「不收集数据」（我们只写 `user://progress.json` 本机文件） |
 | 内容分级 | 填 IARC 问卷（本作无暴力/无用户内容 → 通常全年龄） |
 | 广告声明 | 无广告（除非后续接广告 SDK） |
-| 目标 API 级别 | Play 会要求较新的 targetSdk（用 Godot 默认值通常够；不够就在预设里显式填 `gradle_build/target_sdk`） |
+| 目标 API 级别 | Play 会要求较新的 targetSdk（2026-08-31 起新应用/更新需 API 36，当前预设显式设为 36；出包后仍需核验） |
 
 ### Apple App Store（`App Store Connect`）
 
@@ -177,8 +180,8 @@ Godot 官方文档原话：
 |---|---|
 | Bundle ID | `com.easyindie.puzzlecore`（必须先注册 App ID） |
 | App 图标 | 1024×1024（Godot 会从 `icon.png` 生成各尺寸） |
-| 截图 | 6.7" 与 6.5" 为必填（横竖屏都可，我们支持双向） |
-| 隐私 | 「不收集数据」；`privacy/*` 那些键全留空即可 |
+| 截图 | 按 App Store Connect 提交时列出的机型与尺寸提供真实截图（支持横竖屏） |
+| 隐私 | 按最终包实际行为填写隐私问卷，并检查导出的 Privacy Manifest；不能仅凭没有业务联网就把所有隐私项留空 |
 | 年龄分级 | 4+（无暴力/无用户内容） |
 | 定价 | 见 §5 的变现建议 |
 
@@ -274,10 +277,10 @@ GF_FORCE_TV=1 DISPLAY=:0 workflow/godot-bin/godot --path games/puzzle-core --res
 - 电视上的**多人/手柄热插拔**处理
 - **TV 专属布局**（例如把 HUD 放到更靠内、按钮更大）：现在是同一套 UI + 缩放
 
-## 5. ⚠️ 上架前必须解决：内容量只有 20 关
+## 5. 首发内容：先验收 20 关，扩充由反馈决定
 
 竞品参照（见 08）：Google Play 上的《Bloxorz - Block And Hole》是 **200 关**；
-移动端玩家对「关卡数」的期待是几十到上百。
+竞品关数不能直接成为本作 MVP 的完成门槛；优先验证教学、曲线和继续挑战意愿。
 
 **好消息**：我们的流水线把扩充成本压得很低 ——
 `tools/build_level_set.gd` 是「声明式曲线 + 可复现种子 + 自动求解验证 + 曲线单调校验」，
@@ -287,7 +290,7 @@ GF_FORCE_TV=1 DISPLAY=:0 workflow/godot-bin/godot --path games/puzzle-core --res
 这一步没法自动化，是真实瓶颈。建议：
 
 1. 用生成器批量产出（例如 120 关候选），按「盘面尺寸 + 洞密度 + 最优步数」筛出一批
-2. 人工按顺序试玩，保留 40~60 关作为首发内容（含一个平滑爬坡的曲线）
+2. 人工按顺序试玩，先精选现有 20 关作为首发内容；40–60 关留作反馈驱动的后续扩展
 3. 把「哪些关卡好玩」的判断标准写下来 —— 下一款游戏就能复用这套标准
 
 **变现选择**：

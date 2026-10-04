@@ -22,6 +22,8 @@ func _init() -> void:
 	_test_replay_label_contract()
 	_test_reset()
 	_test_reset_campaign()
+	_test_resume()
+	_test_wrong_field_types()
 	_remove(TMP)
 
 	var result: Dictionary = {
@@ -39,6 +41,43 @@ func check(cond: bool, msg: String) -> void:
 	if not cond:
 		failures += 1
 		push_error("FAIL: " + msg)
+
+
+func _test_resume() -> void:
+	var p = Progress.new(TMP)
+	p.reset()
+	var keys: Array = ["a", "b", "c"]
+	check(p.resume_index(keys) == 0, "新玩家从第 1 关开始")
+	p.record_win("a", ["right"])
+	check(p.resume_index(keys) == 1, "旧存档续到首个未完成关卡")
+	p.set_current_level("c")
+	check(p.resume_index(keys) == 1, "存档位置不能绕过关卡锁定")
+	p.record_win("b", ["right"])
+	p.set_current_level("c")
+	check(Progress.new(TMP).resume_index(keys) == 2, "重新打开游戏保留未完成关卡位置")
+	p.record_win("c", ["right"])
+	check(p.resume_index(keys) == 2, "全通关后保留最近挑战位置")
+	p.reset_campaign()
+	check(Progress.new(TMP).resume_index(keys) == 0, "再玩一轮从第 1 关开始")
+	check(p.best_moves("c") == 1, "续玩与重玩不删除最佳纪录")
+	check(p.resume_index([]) == 0, "空关卡列表安全退回起点")
+	p.reset()
+	check(Progress.new(TMP).resume_index(keys) == 0, "清空进度也清除续玩位置")
+
+
+func _test_wrong_field_types() -> void:
+	var f := FileAccess.open(TMP, FileAccess.WRITE)
+	f.store_string(JSON.stringify({"completed": 5, "cleared_ever": null,
+		"best_moves": {"a": -2, "b": "bad", "c": 3}, "best_times": [],
+		"replays": "bad", "runs": false}))
+	f.close()
+	var p = Progress.new(TMP)
+	check(p.completed_count() == 0, "错误类型的存档字段不能中断加载")
+	check(p.best_moves("a") == -1 and p.best_moves("b") == -1, "非法成绩不能成为玩家纪录")
+	check(p.best_moves("c") == 3, "仍可恢复未损坏的成绩")
+	check(p.save(), "原子保存成功")
+	check(Progress.new(TMP).best_moves("c") == 3, "替换存档后可以重新读取")
+	check(not FileAccess.file_exists(TMP + ".tmp"), "成功保存不会留下临时存档")
 
 
 func _remove(path: String) -> void:

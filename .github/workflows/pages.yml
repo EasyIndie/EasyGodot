@@ -69,8 +69,8 @@ jobs:
           workflow/godot-bin/godot --version
 
       - name: 导入资源
-        # 首次导出前需要建立 .godot 导入缓存；个别非致命告警不影响导出
-        run: workflow/godot-bin/godot --headless --path "$PROJECT" --import || true
+        # 导入失败必须阻断发布，不能把资源错误隐藏在成功构建中。
+        run: workflow/godot-bin/godot --headless --path "$PROJECT" --import
 
       - name: 检查脚本执行位（WSL/Windows 下 git 记不住权限，CI 会 Permission denied）
         run: workflow/scripts/gf-check-exec.sh

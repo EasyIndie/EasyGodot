@@ -12,10 +12,17 @@ func _run() -> void:
 	var args: Array = OS.get_cmdline_user_args()
 	var level: String = str(args[0]) if args.size() > 0 else "res://levels/level_01.json"
 	var out: String = str(args[1]) if args.size() > 1 else "res://_shot.png"
+	var save_path := "user://screenshot_progress.json"
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(save_path))
+	ProjectSettings.set_setting("puzzle/progress_path", save_path)
 
 	var scene = load("res://scenes/main.tscn").instantiate()
 	root.add_child(scene)
 	await process_frame
+	if args.has("--touch"):
+		scene._query_string = "?touch=1"
+		scene._touch_active = true
+		scene._apply_touch_visibility()
 	# 加载指定关卡并重新取景
 	# 走 main 的索引加载，HUD 才能显示正确的关卡号/进度；找不到才退回直载
 	var idx: int = scene.levels.find(level)
@@ -24,7 +31,9 @@ func _run() -> void:
 	else:
 		scene.game.load_level(level)
 	scene._frame_camera()
-	for _i in range(4):
+	if args.has("--menu"):
+		scene._open_level_select()
+	for _i in range(12):
 		await process_frame
 
 	var img: Image = root.get_texture().get_image()
@@ -35,4 +44,5 @@ func _run() -> void:
 		"out": out,
 		"size": [img.get_width(), img.get_height()],
 	}))
+	DirAccess.remove_absolute(ProjectSettings.globalize_path(save_path))
 	quit(0 if err == OK else 1)

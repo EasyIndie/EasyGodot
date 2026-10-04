@@ -5,10 +5,10 @@
 #
 # 用法:
 #   gf-run.sh -p games/puzzle-core res://tools/build_level_set.gd
-#   gf-run.sh -p games/puzzle-core res://tools/build_level_set.gd --seed 42 --out res://levels
+#   gf-run.sh -p games/puzzle-core res://tools/build_level_set.gd --seed 42 --out res://levels/generated/candidates
 # 参数（经 -- 传入，用 OS.get_cmdline_user_args() 读取）:
 #   --seed S   基准种子（默认 2027，可复现）
-#   --out DIR  输出目录（默认 res://levels）
+#   --out DIR  输出目录（默认候选目录；正式首发关卡需经过试玩精选）
 # 输出: 单行 JSON（逐关报告 + 汇总）；任一关未达规格 / 曲线不单调则退出码非 0。
 extends SceneTree
 
@@ -622,7 +622,7 @@ func _gen_one(spec: Dictionary, difficulty: String, seed: int) -> Dictionary:
 
 
 func _parse_args(args: Array) -> Dictionary:
-	var o := {"seed": 2027, "out": "res://levels"}
+	var o := {"seed": 2027, "out": "res://levels/generated/candidates"}
 	var i := 0
 	while i < args.size():
 		var k: String = str(args[i])

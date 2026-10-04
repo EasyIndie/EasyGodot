@@ -33,8 +33,10 @@ _android_precheck() {
 	# 这里曾经写死 editor_settings-4.tres → 明明配好了却报“没有配置”（真实 bug）。
 	local settings="${GODOT_EDITOR_SETTINGS:-}"
 	if [ -z "$settings" ]; then
-		settings="$(ls -1t "$HOME"/.config/godot/editor_settings-*.tres 2>/dev/null | head -1 || true)"
-		[ -z "$settings" ] && settings="$HOME/.config/godot/editor_settings-4.tres"
+		local config_dir="$HOME/.config/godot"
+		[ "$(uname -s)" = "Darwin" ] && config_dir="$HOME/Library/Application Support/Godot"
+		settings="$(ls -1t "$config_dir"/editor_settings-*.tres 2>/dev/null | head -1 || true)"
+		[ -z "$settings" ] && settings="$config_dir/editor_settings-4.7.tres"
 	fi
 	local sdk_tmp="" java_tmp=""
 	[ -f "$settings" ] && {

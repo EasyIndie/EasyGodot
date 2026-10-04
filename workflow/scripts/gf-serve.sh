@@ -27,7 +27,7 @@ echo "=== 托管目录: $WEB_DIR ==="
 if [ -f "$PCK" ]; then
 	echo "=== index.pck 更新时间: $(date -r "$PCK" '+%Y-%m-%d %H:%M:%S') ==="
 fi
-echo "=== 浏览器打开: http://localhost:$PORT（已禁用缓存，改完重新导出刷新即可）==="
+echo "=== 浏览器打开: http://localhost:${PORT}（已禁用缓存，改完重新导出刷新即可）==="
 echo "=== 停止: Ctrl+C ==="
 cd "$WEB_DIR"
 PY_SERVER="$SCRIPT_DIR/serve_nocache.py"

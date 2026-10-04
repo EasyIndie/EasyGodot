@@ -34,6 +34,7 @@ var _ghost: bool = false          # 偏好：是否显示「上次的走法」�
 # 偏好：是否在屏幕上显示方向键。默认**关** —— 手势是主要输入，
 # 少一块按钮，棋盘就多一块（真机反馈：屏幕上的按钮太多太抢）。
 var _pad: bool = false
+var _current_level: String = ""  # 普通模式最近玩的关卡；好友挑战不覆盖它
 
 
 func _init(p_path: String = DEFAULT_PATH) -> void:
@@ -63,15 +64,17 @@ func _read() -> void:
 	var d = j.data
 	if not (d is Dictionary):
 		return
-	for k in d.get("completed", {}):
+	for k in _map(d, "completed"):
 		_completed[str(k)] = true
-	for k in d.get("cleared_ever", {}):
+	for k in _map(d, "cleared_ever"):
 		_ever[str(k)] = true
-	for k in d.get("best_moves", {}):
-		_best[str(k)] = int(d["best_moves"][k])
-	for k in d.get("best_times", {}):
-		_best_time[str(k)] = int(d["best_times"][k])
-	for k in d.get("replays", {}):
+	for k in _map(d, "best_moves"):
+		if _valid_record(d["best_moves"][k]):
+			_best[str(k)] = int(d["best_moves"][k])
+	for k in _map(d, "best_times"):
+		if _valid_record(d["best_times"][k]):
+			_best_time[str(k)] = int(d["best_times"][k])
+	for k in _map(d, "replays"):
 		var r = d["replays"][k]
 		if r is Dictionary and (r.get("moves") is Array):
 			var mv: Array = r["moves"]
@@ -82,7 +85,8 @@ func _read() -> void:
 			}
 	_ghost = bool(d.get("ghost", false))
 	_pad = bool(d.get("pad", false))
-	for k in d.get("runs", {}):
+	_current_level = str(d.get("current_level", ""))
+	for k in _map(d, "runs"):
 		var arr = d["runs"][k]
 		if arr is Array:
 			var rs: Array = []
@@ -109,11 +113,22 @@ func _read() -> void:
 			}]
 
 
+static func _map(data: Dictionary, key: String) -> Dictionary:
+	var value = data.get(key, {})
+	return value if value is Dictionary else {}
+
+
+static func _valid_record(value) -> bool:
+	return (value is int or value is float) and is_finite(float(value)) and float(value) >= 0.0
+
+
 func save() -> bool:
 	var dir := path.get_base_dir()
 	if dir != "":
 		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(dir))
-	var f := FileAccess.open(path, FileAccess.WRITE)
+	# 先写临时文件，再替换正式存档；写入被打断时保留上一次完整进度。
+	var pending: String = path + ".tmp"
+	var f := FileAccess.open(pending, FileAccess.WRITE)
 	if f == null:
 		return false
 	f.store_string(JSON.stringify({
@@ -126,9 +141,14 @@ func save() -> bool:
 		"runs": _runs,
 		"ghost": _ghost,
 		"pad": _pad,
+		"current_level": _current_level,
 	}, "\t"))
+	f.flush()
+	var write_error: Error = f.get_error()
 	f.close()
-	return true
+	if write_error != OK:
+		return false
+	return DirAccess.rename_absolute(ProjectSettings.globalize_path(pending), ProjectSettings.globalize_path(path)) == OK
 
 
 # ── 查询 ───────────────────────────────────────────────
@@ -214,6 +234,25 @@ func is_unlocked(index: int, keys: Array) -> bool:
 	return _ever.has(str(keys[index - 1]))
 
 
+func set_current_level(key: String) -> void:
+	if _current_level == key:
+		return
+	_current_level = key
+	save()
+
+
+func resume_index(keys: Array) -> int:
+	# 未完成的一关优先续玩；旧存档没有游玩位置时续到第一关未完成关卡。
+	# 所有关卡已完成时保留最近选择，方便继续挑战自己的纪录。
+	var last: int = keys.find(_current_level)
+	if last >= 0 and is_unlocked(last, keys) and not is_completed(str(keys[last])):
+		return last
+	for i in range(keys.size()):
+		if is_unlocked(i, keys) and not is_completed(str(keys[i])):
+			return i
+	return last if last >= 0 and is_unlocked(last, keys) else 0
+
+
 # ── 写入 ───────────────────────────────────────────────
 
 func record_win(key: String, moves: Array, time_ms: int = -1) -> Dictionary:
@@ -261,6 +300,7 @@ func reset_campaign() -> void:
 	# 「再玩一遍」：只清本轮通关进度。
 	# 保留 best / replays / runs（玩家的记录是资产）与 _ever（已解锁关卡不重锁）。
 	_completed.clear()
+	_current_level = ""
 	save()
 
 
@@ -274,4 +314,5 @@ func reset() -> void:
 	_runs.clear()
 	_ghost = false
 	_pad = false
+	_current_level = ""
 	save()

@@ -8,6 +8,9 @@
 规则与引擎解耦、关卡由 AI 生成并自动质检、视觉层保持薄、全部环节 headless 可测。
 第一款游戏（3D 几何翻滚解谜）用来验证整条流水线，而不是为了做一款游戏而搭一套框架。
 
+**当前目标：完成首发 MVP。** 先验收 Web 的电脑与手机体验，再上架 Android 与 App Store。
+当前范围、关卡节奏与发布门禁见 [首发计划](workflow/docs/11-first-release-plan.md)。
+
 ---
 
 ## ▶ 在线试玩
@@ -42,7 +45,7 @@ workflow/                跨游戏复用的平台（脚本、文档、pi 扩展�
 3D 几何翻滚解谜（灵感来自 Bloxorz）：翻滚骨牌，把**竖立**的骨牌**恰好**停在目标格上，
 掉出棋盘或踩空即失败。
 
-- **20 关**，平滑爬坡：步数 2→15 · 盘面 25→144 格 · 洞密度 4%→25%（曲线由工具自动校验）
+- **20 关**：最优步数 2→18，非递减且每关增加不超过 2 步；入门 → 路线规划 → 传送门 → 开关与桥 → 组合终章
 - 斜 45° 等距视角、翻滚/坠落/重生动画、空洞即「地面缺失」
 - 选关界面（顺序解锁）、通关回放、最佳步数与本机榜、**全部通关庆祝**
 - 求解器 BFS 出**最优解**，用作关卡质检门禁
@@ -57,8 +60,11 @@ workflow/                跨游戏复用的平台（脚本、文档、pi 扩展�
 ## 快速开始
 
 ```bash
-# 跑全部测试（9 个套件 / 620+ 断言）
+# 跑全部测试（16 个套件，包含首发关卡曲线守卫）
 workflow/scripts/gf-test.sh
+
+# 首发自动门禁（加 --web 可生成 Web 候选，不部署）
+workflow/scripts/gf-release-check.sh
 
 # 本地预览 Web 版（多线程 + 禁用缓存，避免「改了代码页面没变」）
 workflow/scripts/gf-serve.sh          # → http://localhost:8000
@@ -66,7 +72,7 @@ workflow/scripts/gf-serve.sh          # → http://localhost:8000
 # 关卡质检（非法 / 不可解时退出码非 0）
 workflow/scripts/gf-run.sh -p games/puzzle-core res://tools/validate_levels.gd
 
-# 按难度曲线可复现地重建正式关卡集
+# 按难度曲线生成候选（默认不覆盖正式关卡；需人工精选）
 workflow/scripts/gf-run.sh -p games/puzzle-core res://tools/build_level_set.gd
 
 # 导出构建（Web + Linux + Windows）
@@ -92,6 +98,7 @@ workflow/scripts/gf-pages.sh
 | [06 新游戏手册](workflow/docs/06-new-game-playbook.md) | 用同一套平台做下一款游戏 |
 | [07 MVP 状态](workflow/docs/07-mvp-status.md) | MVP 对照表、待办、坑与交接说明 |
 | [10 关卡机制升级](workflow/docs/10-level-mechanics.md) | 多块棋盘 + 机关（开关/桥/闸门/传送门/碎裂砖）、求解器如何自动适配、"机关是否承重"自动判据 |
+| [11 首发计划与验收](workflow/docs/11-first-release-plan.md) | 当前 MVP 范围、递增关卡节奏、Web 多设备验收、Android/iOS 发布门槛 |
 
 ## CI / 发布
 
@@ -115,5 +122,5 @@ workflow/scripts/gf-pages.sh games/puzzle-core --deploy     # 强推到 gh-pages
 
 - [Godot Engine](https://godotengine.org/) 4.7.2（MIT）
 - [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（SIL OFL 1.1）
-  —— 已用 `workflow/scripts/gf-font-subset.sh` 按项目实际用字裁剪为 **272KB 子集**
+  —— 已用 `workflow/scripts/gf-font-subset.sh` 按项目实际用字裁剪为 **约 148KB 子集**
   （原字体 16.4MB），由 `tests/test_font.gd` 守卫生效

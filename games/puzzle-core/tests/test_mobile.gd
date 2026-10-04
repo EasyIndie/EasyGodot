@@ -14,6 +14,10 @@ func _init() -> void:
 
 
 func _run() -> void:
+	var layout = preload("res://meta/ui_layout.gd")
+	check(layout.web_ui_scale(2.0) == 2.0, "Retina UI 应按 CSS 像素缩放")
+	check(layout.web_ui_scale(1.0) == 1.0, "普通屏幕保持 UI 尺寸")
+	check(layout.web_ui_scale(NAN) == 1.0, "无效 DPR 安全回退")
 	_test_project_settings()
 	_test_icon_assets()
 	_test_export_presets()
@@ -155,6 +159,8 @@ func _test_export_presets() -> void:
 	var aab_sec: String = str(by_name.get("Android (AAB)", ""))
 	if aab_sec != "":
 		var o := aab_sec + ".options"
+		check(int(cfg.get_value(o, "gradle_build/target_sdk", "0")) >= 36,
+			"首发 AAB targetSdk 应至少为 36")
 		check(str(cfg.get_value(aab_sec, "platform", "")) == "Android", "AAB 预设的 platform 应为 Android")
 		check(int(cfg.get_value(o, "gradle_build/export_format", -1)) == 1, "AAB 预设导出格式应为 AAB（1）")
 		check(bool(cfg.get_value(o, "gradle_build/use_gradle_build", false)) == true,

@@ -7,7 +7,7 @@ config_version=5
 [application]
 
 config/name="Puzzle Core"
-config/description="Game Factory 的第一个试点游戏：3D 几何滚动解谜。验证自动化游戏制作工作流。"
+config/description="翻滚方块，连接道路，竖立在目标格上。20 关几何解谜，挑战更少的步数。"
 config/version="0.1.0"
 ; 应用图标（1024×1024）。这一个文件同时是：
 ;   · 桌面窗口图标

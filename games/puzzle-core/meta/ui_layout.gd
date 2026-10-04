@@ -23,7 +23,7 @@ static func camera_distance(board_size: float, aspect: float, fov_deg: float) ->
 
 
 static func touch_unit(viewport: Vector2) -> float:
-	# 触屏控件基准尺寸（缓冲区像素）：取短边比例。
+	# 触屏控件基准尺寸（UI 逻辑像素）：取短边比例。
 	# 横屏时短边就是高度，用同样系数会吃掉半个屏幕，所以取更小的系数。
 	var short_side: float = minf(viewport.x, viewport.y)
 	var k: float = 0.13 if viewport.x > viewport.y else 0.16
@@ -33,7 +33,11 @@ static func touch_unit(viewport: Vector2) -> float:
 static func level_grid(viewport: Vector2, count: int) -> Dictionary:
 	# 选关网格：列数随宽度降级，卡片尺寸按可用宽度反算，保证窄屏不溢出。
 	var cols: int = 5
-	if viewport.x < 700.0:
+	if viewport.x < 180.0:
+		cols = 1
+	elif viewport.x < 280.0:
+		cols = 2
+	elif viewport.x < 700.0:
 		cols = 3
 	elif viewport.x < 900.0:
 		cols = 4
@@ -151,3 +155,8 @@ static func tv_ui_scale(short_side: float) -> float:
 	if short_side >= 900.0:
 		return TV_SCALE_1080
 	return 1.0
+
+
+static func web_ui_scale(canvas_css_ratio: float) -> float:
+	# 使用实际画布比例，兼容浏览器缩放和 Web 画质档位对 DPR 的限制。
+	return clampf(canvas_css_ratio, 0.5, 4.0) if is_finite(canvas_css_ratio) else 1.0

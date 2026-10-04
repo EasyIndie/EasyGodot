@@ -24,8 +24,10 @@ GODOT="$SCRIPT_DIR/../godot-bin/godot"
 SETTINGS="${GODOT_EDITOR_SETTINGS:-}"
 if [ -z "$SETTINGS" ]; then
 	# 取 mtime 最新的一个（Godot 不同小版本可能用不同文件名）
-	SETTINGS="$(ls -1t "$HOME"/.config/godot/editor_settings-*.tres 2>/dev/null | head -1 || true)"
-	[ -z "$SETTINGS" ] && SETTINGS="$HOME/.config/godot/editor_settings-4.tres"
+	CONFIG_DIR="$HOME/.config/godot"
+	[ "$(uname -s)" = "Darwin" ] && CONFIG_DIR="$HOME/Library/Application Support/Godot"
+	SETTINGS="$(ls -1t "$CONFIG_DIR"/editor_settings-*.tres 2>/dev/null | head -1 || true)"
+	[ -z "$SETTINGS" ] && SETTINGS="$CONFIG_DIR/editor_settings-4.7.tres"
 fi
 
 SDK="${1:-}"
@@ -33,7 +35,7 @@ JDK="${2:-}"
 
 # ── 自动探测 ──
 if [ -z "$SDK" ]; then
-	for c in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}" "$HOME/Android/Sdk" "$HOME/android-sdk" "/usr/lib/android-sdk"; do
+	for c in "${ANDROID_SDK_ROOT:-}" "${ANDROID_HOME:-}" "$HOME/Library/Android/sdk" "$HOME/Android/Sdk" "$HOME/android-sdk" "/usr/lib/android-sdk"; do
 		[ -n "$c" ] && [ -d "$c/build-tools" ] && SDK="$c" && break
 	done
 fi

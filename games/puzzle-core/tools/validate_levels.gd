@@ -19,7 +19,7 @@ func _init() -> void:
 		summary[str(r["status"])] = summary.get(str(r["status"]), 0) + 1
 
 	print(JSON.stringify({"levels": results, "summary": summary}))
-	var ok: bool = summary["invalid"] == 0 and summary["unsolvable"] == 0
+	var ok: bool = summary["total"] > 0 and summary["invalid"] == 0 and summary["unsolvable"] == 0
 	quit(0 if ok else 1)
 
 
@@ -37,6 +37,7 @@ func _collect_paths() -> Array:
 				out.append("res://levels/" + f)
 			f = dir.get_next()
 		dir.list_dir_end()
+	out.sort()
 	return out
 
 
@@ -49,6 +50,8 @@ func _validate_path(p: String) -> Dictionary:
 	var json := JSON.new()
 	if json.parse(text) != OK:
 		return {"path": p, "status": "invalid", "errors": ["bad json at line " + str(json.get_error_line())]}
+	if not (json.data is Dictionary):
+		return {"path": p, "status": "invalid", "errors": ["level must be an object"]}
 	var r: Dictionary = Validate.validate_dict(json.data)
 	r["path"] = p
 	return r

@@ -2,8 +2,8 @@
 	"difficulty": "expert",
 	"goal": [
 		[
-			3,
-			1
+			0,
+			4
 		]
 	],
 	"grid": {
@@ -223,15 +223,29 @@
 					1
 				]
 			]
+		},
+		{
+			"id": "p1",
+			"kind": "portal",
+			"links": [
+				[
+					7,
+					2
+				],
+				[
+					10,
+					8
+				]
+			]
 		}
 	],
 	"optimal_moves": 18,
 	"start": {
 		"orientation": "lying_x",
 		"position": [
-			6,
+			8,
 			0,
-			9
+			8
 		],
 		"shape": "domino"
 	}

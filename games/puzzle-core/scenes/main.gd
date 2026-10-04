@@ -12,6 +12,7 @@ const Ending = preload("res://meta/ending.gd")
 const Leaderboard = preload("res://meta/leaderboard.gd")
 const Stopwatch = preload("res://meta/stopwatch.gd")
 const Share = preload("res://meta/share.gd")
+const Campaign = preload("res://meta/campaign.gd")
 
 var game: Node3D = null
 var cam: Camera3D = null
@@ -64,6 +65,9 @@ var time_label: Label
 var win_label: Label
 var fail_label: Label
 var help_label: Label
+var lesson_label: Label
+var _lesson_left: float = 0.0
+var _level_epoch: int = 0  # 作废旧关卡仍在等待的通关协程
 var best_label: Label
 var _hud_narrow: bool = false
 var left_panel: PanelContainer
@@ -107,6 +111,7 @@ func _ready() -> void:
 		_quality_tier = RenderQuality.initial_tier(_touch_wanted_early(), lite_mode)
 	else:
 		_quality_tier = clampi(int(float(tier_arg)), 0, RenderQuality.TIERS - 1)
+	_apply_tv_ui_scale()
 	_setup_camera()
 	_setup_light()
 	_setup_environment()
@@ -128,7 +133,7 @@ func _ready() -> void:
 	clock = Stopwatch.new()
 	_setup_challenge()
 	# 挑战模式直接载入指定关卡（收到链接的人不该被迫先通关前面 11 关）
-	_load_level(int(_challenge.get("level", 1)) - 1 if challenge_active() else 0, false)
+	_load_level(int(_challenge.get("level", 1)) - 1 if challenge_active() else progress.resume_index(_level_keys()), false)
 	_apply_tv_ui_scale()
 	# 移动端的「返回」：根窗口发 go_back_requested（Android 返回键 / iOS 边缘返回手势）。
 	# 必须在 project.godot 里把 application/config/quit_on_go_back 设为 false，
@@ -191,6 +196,10 @@ func _apply_render_quality() -> void:
 
 
 func _process(delta: float) -> void:
+	if _lesson_left > 0.0 and _clock_should_run():
+		_lesson_left = maxf(0.0, _lesson_left - delta)
+		if _lesson_left == 0.0:
+			_refresh_bands()
 	_refresh_clock()
 	_update_clock_label()
 	_flush_pending_move()
@@ -253,7 +262,7 @@ func back_action() -> String:
 		return "quit"
 	if _replaying:
 		return "stop_replay"
-	if transitioning or game == null or game.is_won() or game.is_lost():
+	if transitioning or game == null:
 		return "ignore"
 	return "open_select"
 
@@ -298,9 +307,10 @@ func _reset_quality_sampling() -> void:
 # ── 安全区域 ──────────────────────────────────────────────
 
 func _on_viewport_resized() -> void:
-	_update_safe_area()
 	_apply_tv_ui_scale()
+	_update_safe_area()
 	_refresh_bands()
+	_frame_camera()
 
 
 func _clock_should_run() -> bool:
@@ -462,13 +472,17 @@ func _is_tv_like() -> bool:
 
 
 func _apply_tv_ui_scale() -> void:
-	# 10 尺 UI：电视要隔三米看，同样的像素尺寸在 4K 电视上小得看不清。
-	# 用 Window.content_scale_factor 整体放大 UI（3D 仍按原生分辨率渲染，棋盘不变形），
-	# 于是 HUD / 选关 / 庆祝层一起变大，不用一处一处改字号。
-	var vp: Vector2 = get_viewport().get_visible_rect().size
-	var want: float = UiLayout.tv_ui_scale(minf(vp.x, vp.y)) if _is_tv_like() else 1.0
+	# Web 的画布保留高清像素，UI 则按 CSS 像素布局，避免 Retina 下字号/热区减半。
+	# TV 使用真实窗口尺寸分档，避免缩放后的 viewport 反复切换档位。
 	var win := get_window()
-	if win != null and not is_equal_approx(win.content_scale_factor, want):
+	if win == null:
+		return
+	var want: float = UiLayout.tv_ui_scale(minf(win.size.x, win.size.y)) if _is_tv_like() else 1.0
+	if OS.has_feature("web"):
+		var ratio = JavaScriptBridge.eval("(function(){var c=document.getElementById('canvas');var r=c.getBoundingClientRect();return r.width>0?c.width/r.width:1;})()", true)
+		if ratio is float or ratio is int:
+			want = UiLayout.web_ui_scale(float(ratio))
+	if not is_equal_approx(win.content_scale_factor, want):
 		win.content_scale_factor = want
 
 
@@ -640,6 +654,19 @@ func _refresh_bands() -> void:
 	var sr: float = float(_safe_insets.get("right", 0.0))
 	var st: float = float(_safe_insets.get("top", 0.0))
 	var sb: float = float(_safe_insets.get("bottom", 0.0))
+	if lesson_label != null:
+		lesson_label.offset_left = sl + 16.0
+		lesson_label.offset_right = -(sr + 16.0)
+		lesson_label.offset_top = st + 82.0
+		lesson_label.offset_bottom = st + 138.0
+		lesson_label.add_theme_font_size_override("font_size", 16)
+		if touch_on and vp.x > vp.y:
+			# 横屏棋盘靠近顶部；教学放在底部动作区上方的一行空隙。
+			lesson_label.offset_top = vp.y - touch_controls.bottom_inset() - 22.0
+			lesson_label.offset_bottom = lesson_label.offset_top + 22.0
+			lesson_label.add_theme_font_size_override("font_size", 14)
+		lesson_label.visible = _lesson_left > 0.0 and not lesson_label.text.is_empty() \
+			and not (win_label.visible or fail_label.visible or replay_label.visible or challenge_active())
 	var band_h: float = 46.0
 	var y: float
 	if at_top:
@@ -719,6 +746,7 @@ func _entry_for(index: int, path: String) -> Dictionary:
 	}
 	var d: Dictionary = _read_json(path)
 	if not d.is_empty():
+		e["title"] = Campaign.title(index)
 		e["shape"] = str(d.get("start", {}).get("shape", "domino"))
 		e["optimal"] = int(d.get("optimal_moves", -1))
 		e["difficulty"] = str(d.get("difficulty", ""))
@@ -762,9 +790,14 @@ func _load_level(index: int, animated: bool = true) -> void:
 func _do_load(index: int) -> void:
 	# 计时归零的唯一位置：重开、换关、回放复位全都走 _do_load（单一真相）
 	_reset_clock()
+	_level_epoch += 1
 	current_index = clampi(index, 0, levels.size() - 1)
 	var ok: bool = game.load_level(levels[current_index])
 	if ok:
+		if not challenge_active():
+			progress.set_current_level(_level_key(current_index))
+		lesson_label.text = lesson_text()
+		_lesson_left = 8.0
 		_run_moves.clear()
 		_pending_move = Vector3i.ZERO
 		win_label.visible = false
@@ -778,6 +811,27 @@ func _do_load(index: int) -> void:
 			touch_controls.show_swipe_hint()
 		# 「影子」：开了就自动把自己的最佳走法滚一遍（换关、重开都会重播一次）
 		_play_ghost_for_current()
+
+
+func lesson_text() -> String:
+	# 短暂、按关卡出现的规则提示；已通关的关卡不重复教学。
+	if progress.has_ever_cleared(_level_key(current_index)):
+		return ""
+	var kinds: Array = []
+	for d in game.board.mechanisms:
+		if not kinds.has(str(d["kind"])):
+			kinds.append(str(d["kind"]))
+	if kinds.has("portal"):
+		if kinds.has("bridge"):
+			return "先开桥，再利用传送门调整路线。传送后姿态不变。"
+		return "传送门保持方块姿态，先想好出口怎么走。"
+	if kinds.has("gate"):
+		return "踩开关会改变道路；留意哪些格子消失了。"
+	if kinds.has("bridge"):
+		return "踩开关打开桥，再翻滚到另一边。"
+	if current_index <= 1:
+		return "竖立在发光目标格上即可通关；平躺不算。"
+	return ""
 
 
 ## 换关：棋盘下沉 + 暗幕淡入（“关卡合拢”）→ 暗幕下换关 → 新棋盘降入 + 淡出
@@ -919,8 +973,8 @@ func _show_ending() -> void:
 
 func _open_level_select() -> void:
 	_clear_pending_move()
-	# 通关/坠落动画期间不要弹选关（否则会和自动换关过渡打架）
-	if transitioning or _replaying or game.is_won() or game.is_lost():
+	# 失败后也能换关；通关后打开菜单则停止自动换关。
+	if transitioning or _replaying:
 		return
 	if levels.is_empty():
 		return
@@ -1052,6 +1106,7 @@ func _on_moved() -> void:
 
 
 func _on_won() -> void:
+	var won_epoch: int = _level_epoch
 	_update_hud()
 	# 回放中到达终点：只提示，不记录进度、不自动换关
 	if _replaying:
@@ -1079,7 +1134,9 @@ func _on_won() -> void:
 	_refresh_bands()
 	# 通关反馈：灯光脉冲一下（方块保持原位、不变色），随后自然滚动换关
 	await _win_beat()
-	if transitioning or levels.is_empty():
+	if won_epoch != _level_epoch or transitioning or levels.is_empty() or not game.is_won():
+		return
+	if level_select != null and level_select.is_open():
 		return
 	if challenge_active():
 		# 挑战模式：到此为止（文案已在上面当场给过）
@@ -1466,6 +1523,11 @@ func _setup_hud() -> void:
 
 	# ── 操作提示（一段时间后自动变淡，减少长期干扰）──────────
 	help_label = _make_status(hud, 15, Color(0.80, 0.85, 0.95))
+	lesson_label = _make_status(hud, 16, Color(0.72, 0.86, 1.0))
+	lesson_label.anchor_right = 1.0
+	lesson_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	lesson_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	lesson_label.visible = false
 	_fade_help_later()
 
 

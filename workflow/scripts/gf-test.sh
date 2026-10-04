@@ -36,14 +36,30 @@ for f in "$PROJECT"/tests/test_*.gd; do
 		echo "!!! $rel 有脚本错误（上面的 SCRIPT ERROR）"
 		fail=1
 	fi
-	if echo "$out" | grep -q '"failures":0'; then
-		:
-	elif echo "$out" | grep -q '"failures":'; then
-		echo "!!! $rel 自报有失败断言"
+	# 套件必须交出唯一、非空的结构化结果；没输出 / 没测东西不能算通过。
+	if ! printf '%s\n' "$out" | python3 -c '
+import json, sys
+results = []
+for line in sys.stdin:
+    try:
+        data = json.loads(line)
+    except ValueError:
+        continue
+    if isinstance(data, dict) and "failures" in data:
+        results.append(data)
+valid = len(results) == 1 and results[0].get("status") == "ok" and type(results[0].get("failures")) is int and results[0]["failures"] == 0 and type(results[0].get("checks")) is int and results[0]["checks"] > 0
+sys.exit(0 if valid else 1)
+'; then
+		echo "!!! $rel 缺少有效测试结果或存在失败断言"
 		fail=1
 	fi
 	echo ""
 done
+
+if [ "$total" -eq 0 ]; then
+	echo "!!! 没有发现测试套件，不能判定通过"
+	fail=1
+fi
 
 echo "=== 汇总: $total 个测试套件 ==="
 if [ $fail -eq 0 ]; then
