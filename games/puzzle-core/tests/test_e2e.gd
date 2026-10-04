@@ -370,7 +370,7 @@ func _test_hud_minimal() -> void:
 
 func _test_touch_controls() -> void:
 	# 触屏操作层：滑动方向映射、按钮联动、不与选关/过渡打架
-	# 1) 方向解算本身的边界（角度容错 / 歧义粘滞 / 阈值缩放）由
+	# 1) 方向解算本身的边界（角度容错 / 歧义等待 / 阈值缩放）由
 	#    tests/test_gesture.gd 逐个角度断言；这里只验**接线**：
 	#    拖动经过操作层，真的发出 direction 信号，且方向正确。
 	var probe := TouchControls.new()
@@ -402,6 +402,37 @@ func _test_touch_controls() -> void:
 		probe3.drag_move(Vector2(600.0, 400.0) + cell.normalized() * (cell.length() * 0.5 * float(i)))
 	probe3.drag_end()
 	check(got3.size() == 1, "一次长拖只能触发一步移动，实际 %d 步" % got3.size())
+	# 事件级回归：第二根手指既不能改方向，也不能抬起时结束第一根手指。
+	probe3.set_shown(true)
+	got3.clear()
+	var finger := InputEventScreenTouch.new()
+	finger.index = 3
+	finger.pressed = true
+	finger.position = Vector2(200, 200)
+	probe3._input(finger)
+	var other := InputEventScreenTouch.new()
+	other.index = 8
+	other.pressed = true
+	other.position = Vector2(500, 500)
+	probe3._input(other)
+	var drag := InputEventScreenDrag.new()
+	drag.index = 8
+	drag.position = Vector2(600, 600)
+	probe3._input(drag)
+	check(got3.is_empty(), "第二根手指拖动不能触发滚动")
+	other.pressed = false
+	probe3._input(other)
+	check(probe3._tracker.active, "第二根手指抬起不能取消第一根手指")
+	drag.index = 3
+	drag.position = Vector2(252, 237)
+	probe3._input(drag)
+	check(got3 == [Vector3i(1, 0, 0)], "第一根手指保持原锚点和方向")
+	finger.pressed = false
+	probe3._input(finger)
+	check(not probe3._tracker.active and probe3._touch_index == -1, "主手指抬起释放追踪状态")
+	probe3.drag_begin(Vector2.ZERO)
+	probe3.set_shown(false)
+	check(not probe3._tracker.active, "打开菜单隐藏触控时取消未完成手势")
 	probe.queue_free()
 	probe3.queue_free()
 

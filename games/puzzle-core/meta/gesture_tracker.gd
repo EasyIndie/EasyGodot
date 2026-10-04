@@ -1,7 +1,7 @@
-# gesture_tracker.gd — 拖动过程的状态机（把"手指轨迹"变成"一串移动"）。
+# gesture_tracker.gd — 拖动过程的状态机（把"手指轨迹"变成"一步移动"）。
 #
 # 与 gesture.gd 分开是刻意的：解算规则是纯函数（可以逐个角度断言），
-# 而"什么时候算一次移动"是有状态的（锚点、粘滞方向、连滚）。
+# 而"什么时候算一次移动"是有状态的（锚点、轨迹、单次触发）。
 # 两层分开后，测试可以只喂坐标序列，不需要任何节点/输入事件。
 #
 # 用法：
@@ -23,7 +23,8 @@ extends RefCounted
 const Gesture = preload("res://meta/gesture.gd")
 
 var dirs: Dictionary = {}            # 网格方向 → 屏幕上走一格的向量（像素，不归一化）
-var prev: Vector3i = Vector3i.ZERO   # 上一次发出的方向（歧义带里粘滞用）
+var prev: Vector3i = Vector3i.ZERO   # 上一次发出的方向（仅用于反馈，不参与下一手判定）
+var last_pos: Vector2 = Vector2.ZERO
 var anchor: Vector2 = Vector2.ZERO   # 本手势的起点（出方向后不再移动）
 var active: bool = false
 var fired: bool = false              # 本手势是否已经出过一步（出了就作废）
@@ -34,6 +35,9 @@ func _init(screen_dirs: Dictionary = {}) -> void:
 
 
 func set_dirs(screen_dirs: Dictionary) -> void:
+	# 旋转/重新取景会改变方向和阈值，旧触点必须抬手后再开始。
+	if active:
+		cancel()
 	dirs = screen_dirs
 
 
@@ -41,6 +45,7 @@ func begin(pos: Vector2) -> void:
 	active = true
 	fired = false
 	anchor = pos
+	last_pos = pos
 
 
 func cancel() -> void:
@@ -73,8 +78,13 @@ func feed(pos: Vector2) -> Vector3i:
 	if not active or fired:
 		return Vector3i.ZERO
 	var delta: Vector2 = pos - anchor
+	var recent: Vector2 = pos - last_pos
+	last_pos = pos
 	var d: Vector3i = Gesture.resolve(delta, dirs, prev)
 	if d == Vector3i.ZERO:
+		return Vector3i.ZERO
+	# 弯曲滑动/回抖：若当前运动明显偏离累计位移，先等玩家纠正，不提前滚错。
+	if recent.length() >= 6.0 and absf(recent.angle_to(delta)) > deg_to_rad(60.0):
 		return Vector3i.ZERO
 	if Gesture.progress(delta, dirs, d) < Gesture.step_px(dirs, d):
 		return Vector3i.ZERO

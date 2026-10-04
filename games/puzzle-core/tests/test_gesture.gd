@@ -100,26 +100,30 @@ func _test_angle_sweep() -> void:
 
 
 func _test_ambiguous_stickiness() -> void:
-	# 屏幕正上方 = 两个方向（-x 与 -z）的数学平局点 —— 玩家想"往远处滚"时
-	# 滑的就是这个角度，上一版会随机翻向。粘滞规则必须让它不翻。
-	var up := Vector2(0.0, -60.0)
-	check(Gesture.resolve(up, DIRS, Vector3i(0, 0, -1)) == Vector3i(0, 0, -1), "含糊的竖直上滑应保持上次的 -z")
-	check(Gesture.resolve(up, DIRS, Vector3i(-1, 0, 0)) == Vector3i(-1, 0, 0), "含糊的竖直上滑应保持上次的 -x")
-	# 关键回归：上一次是 +x（往右下），此时竖直上滑的候选是 -x/-z —— 一个都不该选 -x
-	#（含糊的手势绝不是"掉头"的意思）
-	var d: Vector3i = Gesture.resolve(up, DIRS, Vector3i(1, 0, 0))
-	check(d == Vector3i(0, 0, -1), "上次 +x 时竖直上滑不该掉头成 -x（实际 %s）" % str(d))
-	# 正下方同理（候选 +x / +z）
-	var down := Vector2(0.0, 60.0)
-	check(Gesture.resolve(down, DIRS, Vector3i(-1, 0, 0)) == Vector3i(0, 0, 1),
-		"上次 -x 时竖直下滑不该掉头成 +x")
-	# 没有历史时也要稳定（同一输入永远同一结果）
-	var a: Vector3i = Gesture.resolve(up, DIRS, Vector3i.ZERO)
-	var b: Vector3i = Gesture.resolve(up, DIRS, Vector3i.ZERO)
-	check(a == b and a != Vector3i.ZERO, "无历史时含糊手势也要稳定且有解")
-	# 明显偏向时不该被粘滞规则带跑（玩家明确要转弯）
-	check(Gesture.resolve(_polar(-60.0, 60.0), DIRS, Vector3i(1, 0, 0)) == Vector3i(0, 0, -1),
-		"明确指向 -z 的滑动必须按玩家意图（粘滞不能压过明确意图）")
+	# 每一条屏幕分界线都拒绝猜测，无论上一手是什么方向。
+	for prev in [Vector3i.ZERO, Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+		for angle in [0.0, 90.0, 180.0, 270.0]:
+			for off in [-5.0, 0.0, 5.0]:
+				check(Gesture.resolve(_polar(angle + off, 80.0), DIRS, prev) == Vector3i.ZERO,
+					"分界线附近不依靠历史猜方向")
+	check(Gesture.resolve(_polar(-60.0, 60.0), DIRS, Vector3i(1, 0, 0)) == Vector3i(0, 0, -1), "明确转向应立即识别")
+	var t = Tracker.new(DIRS)
+	t.begin(Vector2.ZERO)
+	check(t.feed(Vector2(0, -80)) == Vector3i.ZERO, "足够长但模糊的滑动也不误触")
+	check(t.feed(Vector2(55, -95)) == Vector3i(0, 0, -1), "模糊滑动修正为右上后无需重按即可移动")
+	t.begin(Vector2.ZERO)
+	check(t.feed(Vector2(0, 60)) == Vector3i.ZERO, "长位移处于分界线时不提前触发")
+	check(t.feed(Vector2(25, 50)) == Vector3i.ZERO, "已达到距离阈值但运动折返时不提前确认")
+	check(t.feed(Vector2(40, 60)) == Vector3i(1, 0, 0), "累计位移与当前运动一致后触发右下")
+	# 两轴长度不等时也应按屏幕角度，不能被短轴放大后的系数带偏。
+	var skew = DIRS.duplicate()
+	skew[Vector3i(1, 0, 0)] *= 4.0
+	skew[Vector3i(-1, 0, 0)] *= 4.0
+	check(Gesture.resolve(_polar(35.26, 80), skew) == Vector3i(1, 0, 0), "不同投影长度不改变指向")
+	check(Gesture.resolve(_polar(35.26, 80), DIRS, Vector3i(-1, 0, 0)) == Vector3i(1, 0, 0), "明确反向允许掉头")
+	t.begin(Vector2.ZERO)
+	t.set_dirs(DIRS)
+	check(t.feed(Vector2(80, 60)) == Vector3i.ZERO, "重新取景取消旧手势")
 
 
 func _test_threshold_scaling() -> void:

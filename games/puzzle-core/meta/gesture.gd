@@ -5,32 +5,15 @@
 #   这种东西靠手在手机上试是试不出来的（试三个角度都"还行"，第四个角度就翻车）。
 #   抽成纯函数后可以把 0°~359° 逐个喂进去断言，边界才真的被钉住。
 #
-# ── 这一版修掉的三个真问题（都来自真机反馈）────────────────────────────
-#
-# ① 方向判错：「角度稍有偏差就滚错方向」
-#    根因：等距视角下四个网格方向在屏幕上成对角分布，相邻两向相隔约 127°，
-#    而**屏幕正上/正下正好是两个方向的分界线**（数学上的平局点）。手指偏几度
-#    分数就翻转。玩家想"往远处滚"时滑的就是近似竖直，于是被随机判成左上或右上。
-#    解法：把滑动**解到棋盘坐标系**（解 2×2 方程，得到"沿棋盘两轴各走了几格"），
-#    再在**歧义带**里改用粘滞规则：优先保持上一次的方向；两个候选里若有掉头，
-#    选另一个（含糊的手势绝不会是想掉头）。
-#
-# ② 不跟手：原来只在**抬手**时判一次
-#    解法：拖动过程中就判（见 gesture_tracker.gd），滑过阈值立刻出方向；
-#    出完方向把锚点前移，于是一次长拖能连着滚好几格（像摇杆一样）。
-#
-# ③ 想清楚再滑就失效：超过 SWIPE_MAX_TIME 的滑动被整条丢弃
-#    解法：取消时间限制。慢滑也是滑，只是玩家在思考。
-#
-# 另外：阈值按**格子屏宽**缩放（clamp 到合理像素区间），4K 平板和 5 寸手机手感一致。
+# 按投影后的四条屏幕方向比较角度，不让格子长度或上一手影响玩家的新意图。
+# 两个方向过于接近时返回 ZERO，等待更明确的轨迹；一次手势仍只产生一步。
 extends RefCounted
 
-const AMBIG := 0.35          # 歧义带：两轴强度差 < 35% 视为"分不出来"（听粘滞规则）
-# 一次移动要滑过多远（相对格子屏宽）。一次手势至多一步，所以偏短更跟手；
-# 下限 STEP_MIN 才是真正防误触的那道保险。
-const STEP_RATIO := 0.85
-const STEP_MIN := 22.0       # 阈值下限（像素）：太小会被手指抖动触发
-const STEP_MAX := 64.0       # 阈值上限（像素）：太大在平板上会滑不动
+const ANGLE_MARGIN := 16.0   # 最接近的两个方向至少相差 16°，边界两侧各留约 8° 纠正带
+const MAX_ANGLE := 60.0
+const STEP_RATIO := 0.75
+const STEP_MIN := 26.0       # 阈值下限（像素）：太小会被手指抖动触发
+const STEP_MAX := 56.0       # 阈值上限（像素）：太大在平板上会滑不动
 const STEP_DEFAULT := 40.0   # 拿不到格子屏宽时的兜底
 
 const AXIS_X := Vector3i(1, 0, 0)
@@ -67,31 +50,28 @@ static func grid_components(delta: Vector2, screen_dirs: Dictionary) -> Vector2:
 		(ex.x * delta.y - delta.x * ex.y) / det)
 
 
-# 滑动 → 网格方向。prev = 上一次**真正发出**的方向，只在歧义带里起作用。
-static func resolve(delta: Vector2, screen_dirs: Dictionary, prev: Vector3i = Vector3i.ZERO) -> Vector3i:
-	if delta.length() < 0.0001:
+# prev 保留参数以兼容调用方；新手势绝不根据历史方向猜测。
+static func resolve(delta: Vector2, screen_dirs: Dictionary, _prev: Vector3i = Vector3i.ZERO) -> Vector3i:
+	if not delta.is_finite() or delta.length() < 0.0001:
 		return Vector3i.ZERO
-	var ab: Vector2 = grid_components(delta, screen_dirs)
-	var ax: float = absf(ab.x)
-	var az: float = absf(ab.y)
-	if ax < 0.000001 and az < 0.000001:
+	var ex: Vector2 = dir_of(screen_dirs, AXIS_X)
+	var ez: Vector2 = dir_of(screen_dirs, AXIS_Z)
+	if ex.length() < 0.0001 or ez.length() < 0.0001 or absf(ex.normalized().cross(ez.normalized())) < 0.05:
 		return Vector3i.ZERO
-	var nx: Vector3i = Vector3i(signi(int(signf(ab.x))), 0, 0) if ax > 0.000001 else Vector3i.ZERO
-	var nz: Vector3i = Vector3i(0, 0, signi(int(signf(ab.y)))) if az > 0.000001 else Vector3i.ZERO
-	if nz == Vector3i.ZERO:
-		return nx
-	if nx == Vector3i.ZERO:
-		return nz
-	if ax > az * (1.0 + AMBIG) or az > ax * (1.0 + AMBIG):
-		return nx if ax > az else nz         # 够明确：谁强听谁的
-	# ── 歧义带（屏幕正上/正下附近）：听粘滞规则 ──
-	if prev == nx or prev == nz:
-		return prev                          # 与上次同向 → 保持（手指抖不会翻）
-	if nx == -prev:
-		return nz                            # 一个候选是掉头 → 选另一个
-	if nz == -prev:
-		return nx
-	return nx if ax >= az else nz            # 没有历史：取强度大的（平局取 x，结果稳定）
+	var best: float = INF
+	var second: float = INF
+	var picked := Vector3i.ZERO
+	for d in [AXIS_X, -AXIS_X, AXIS_Z, -AXIS_Z]:
+		var angle: float = absf(rad_to_deg(delta.angle_to(dir_of(screen_dirs, d))))
+		if angle < best:
+			second = best
+			best = angle
+			picked = d
+		elif angle < second:
+			second = angle
+	if best > MAX_ANGLE or second - best < ANGLE_MARGIN:
+		return Vector3i.ZERO
+	return picked
 
 
 # 这次移动需要的滑动距离（像素）：按格子屏宽缩放并 clamp。

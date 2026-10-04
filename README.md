@@ -99,6 +99,7 @@ workflow/scripts/gf-pages.sh
 | [07 MVP 状态](workflow/docs/07-mvp-status.md) | MVP 对照表、待办、坑与交接说明 |
 | [10 关卡机制升级](workflow/docs/10-level-mechanics.md) | 多块棋盘 + 机关（开关/桥/闸门/传送门/碎裂砖）、求解器如何自动适配、"机关是否承重"自动判据 |
 | [11 首发计划与验收](workflow/docs/11-first-release-plan.md) | 当前 MVP 范围、递增关卡节奏、Web 多设备验收、Android/iOS 发布门槛 |
+| [13 手势输入改进](workflow/docs/13-touch-input.md) | 方向置信度、模糊轨迹纠正、多指隔离与手势回归测试 |
 
 ## CI / 发布
 

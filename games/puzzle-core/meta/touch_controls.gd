@@ -89,6 +89,7 @@ var _unit: float = 64.0
 var _screen_dirs: Dictionary = {}   # 由 main.gd 用相机 unproject 现算后注入
 var _insets: Dictionary = {"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}
 var _tracker = null            # GestureTracker：拖动 → 移动序列
+var _touch_index: int = -1
 var _has_touch: bool = false   # 见过真触摸后就不再理会鼠标（触摸会再模拟一次鼠标）
 var _drag_begin: Vector2 = Vector2.ZERO
 var _drag_moved: bool = false  # 已超出"点按"范围 → 事件不再交给按钮
@@ -196,6 +197,8 @@ func set_shown(on: bool) -> void:
 	visible = on
 	if on:
 		_apply_layout()
+	else:
+		drag_end()
 
 
 func is_shown() -> bool:
@@ -498,6 +501,7 @@ func drag_move(pos: Vector2) -> bool:
 
 
 func drag_end() -> void:
+	_touch_index = -1
 	if _tracker != null:
 		_tracker.cancel()
 
@@ -508,7 +512,7 @@ func _emit_dir(d: Vector3i) -> void:
 	if d == Vector3i.ZERO:
 		return
 	if _tracker != null:
-		_tracker.prev = d     # 粘滞方向跟着玩家最后一次意图走
+		_tracker.prev = d     # 记录方向供反馈查询，不影响下一手识别
 	_flash[d] = FLASH_TIME
 	direction.emit(d)
 
@@ -521,15 +525,17 @@ func _input(event: InputEvent) -> void:
 	if event is InputEventScreenTouch:
 		_has_touch = true
 		if event.pressed:
-			if _tracker != null and _tracker.active:
-				return                 # 只认第一根手指：多指不会打乱锚点
+			if _touch_index != -1:
+				return
+			_touch_index = event.index
 			drag_begin(event.position)
-		else:
+		elif event.index == _touch_index:
 			drag_end()
 		return
 	if event is InputEventScreenDrag:
 		_has_touch = true
-		drag_move(event.position)
+		if event.index == _touch_index:
+			drag_move(event.position)
 		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if _has_touch:
