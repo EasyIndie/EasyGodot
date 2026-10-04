@@ -40,6 +40,8 @@
 #     真正修"不跟手"靠的是：不等抬手就判定 + 动画期间不丢输入（main.gd 的缓冲）。
 extends CanvasLayer
 
+const I18n = preload("res://meta/i18n.gd")
+
 signal direction(d: Vector3i)
 signal restart_pressed
 signal select_pressed
@@ -154,7 +156,7 @@ func _ready() -> void:
 	]
 
 	for spec in specs:
-		var b := _make_button(str(spec[0]))
+		var b := _make_button(I18n.t(str(spec[0])))
 		var sig: String = str(spec[1])
 		b.pressed.connect(func() -> void: emit_signal(sig))
 		_actions.add_child(b)
@@ -182,7 +184,7 @@ func _ready() -> void:
 	hsb.content_margin_bottom = 7.0
 	_hint.add_theme_stylebox_override("panel", hsb)
 	_hint_label = Label.new()
-	_hint_label.text = HINT_TEXT
+	_hint_label.text = I18n.t(HINT_TEXT)
 	_hint_label.add_theme_color_override("font_color", Color(0.86, 0.92, 1.0))
 	_hint.add_child(_hint_label)
 	_root.add_child(_hint)
@@ -258,13 +260,15 @@ func set_replay_playing(playing: bool) -> void:
 	_replay_playing = playing
 	if _action_buttons.size() >= 3:
 		var b: Button = _action_buttons[2]
-		b.text = ACTION_STOP if playing else ACTION_REPLAY
+		b.text = I18n.t(ACTION_STOP if playing else ACTION_REPLAY)
 		if playing:
 			b.add_theme_stylebox_override("normal", _sb(Color(0.42, 0.16, 0.18, 0.80), Color(1.0, 0.55, 0.55, 0.65)))
 			b.add_theme_stylebox_override("hover", _sb(Color(0.55, 0.22, 0.24, 0.90), Color(1.0, 0.65, 0.65, 0.85)))
 		else:
 			b.add_theme_stylebox_override("normal", _sb(Color(0.09, 0.12, 0.20, 0.62), Color(1, 1, 1, 0.14)))
 			b.add_theme_stylebox_override("hover", _sb(Color(0.14, 0.19, 0.30, 0.72), Color(0.55, 0.75, 1.0, 0.60)))
+
+	_apply_layout()
 
 
 func is_replay_playing() -> bool:
@@ -393,6 +397,12 @@ func _apply_layout() -> void:
 	for b in _action_buttons:
 		b.custom_minimum_size = Vector2(bw, bh)
 		b.add_theme_font_size_override("font_size", int(bh * 0.36))
+	# 英文等语言可能更长（例如 Stop replay），按实际字体量宽。
+	for b in visible_actions:
+		var font: Font = b.get_theme_font("font")
+		bw = maxf(bw, font.get_string_size(b.text, HORIZONTAL_ALIGNMENT_LEFT, -1, b.get_theme_font_size("font_size")).x + 24.0)
+	for b in _action_buttons:
+		b.custom_minimum_size.x = bw
 	var n: int = maxi(visible_actions.size(), 1)
 	var aw: float = bw * float(n) + sep * float(n - 1)
 	# 一行放不下（极窄屏 + 三个按钮）→ 按总宽缩字号与按钮宽，绝不换行堆高
@@ -405,6 +415,15 @@ func _apply_layout() -> void:
 		for b in _action_buttons:
 			b.custom_minimum_size = Vector2(bw, bh)
 			b.add_theme_font_size_override("font_size", int(maxf(bh * 0.36, 11.0)))
+	# 收窄后再按按钮真实内边距量字，避免文本最小宽度重新撑开整排。
+	for b in visible_actions:
+		var font: Font = b.get_theme_font("font")
+		var font_size: int = b.get_theme_font_size("font_size")
+		var text_width: float = bw - b.get_theme_stylebox("normal").get_minimum_size().x
+		while font_size > 10 and font.get_string_size(b.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > text_width:
+			font_size -= 1
+		if font_size != b.get_theme_font_size("font_size"):
+			b.add_theme_font_size_override("font_size", font_size)
 	_actions.size = Vector2(aw, bh)
 	_actions.position = Vector2(vp.x - sr - margin - aw, vp.y - sb - margin - bh)
 
@@ -428,6 +447,9 @@ func _apply_layout() -> void:
 	var above: float = (pad + margin + 10.0) if _pad_enabled else 0.0
 	var hint_y: float = vp.y - sb - margin - above - hs.y
 	_hint.position = Vector2(sl + margin, maxf(hint_y, st + 8.0))
+	# 窄屏提示和动作按钮放不进同一行时，提示上移，不缩成难读的小字。
+	if _hint.get_rect().intersects(_actions.get_rect()):
+		_hint.position.y = maxf(_actions.position.y - hs.y - 10.0, st + 8.0)
 
 
 func _make_button(text: String) -> Button:

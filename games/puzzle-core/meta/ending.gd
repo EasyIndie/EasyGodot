@@ -9,6 +9,8 @@
 # 不碰 Board / State；因此可以在 headless 下完整单测。
 extends CanvasLayer
 
+const I18n = preload("res://meta/i18n.gd")
+
 signal restart_requested      # 回到第 1 关
 signal select_requested       # 打开选关
 signal closed
@@ -80,7 +82,7 @@ func _ready() -> void:
 
 	_title = Label.new()
 	_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_title.text = "全部通关！"
+	_title.text = I18n.t("全部通关！")
 	_title.add_theme_color_override("font_color", Color(0.98, 0.94, 0.75))
 	col.add_child(_title)
 
@@ -103,17 +105,17 @@ func _ready() -> void:
 	_buttons.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(_buttons)
 
-	var again := _make_button("再玩一遍")
+	var again := _make_button(I18n.t("再玩一遍"))
 	again.pressed.connect(func() -> void: restart_requested.emit())
 	_buttons.add_child(again)
-	var to_select := _make_button("回到选关")
+	var to_select := _make_button(I18n.t("回到选关"))
 	to_select.pressed.connect(func() -> void: select_requested.emit())
 	_buttons.add_child(to_select)
 
 	# 按钮语义必须写出来：这会清本轮通关进度（但不动记录、不重锁关卡）。
 	# 「再玩一遍」不重置本轮进度的话，第二轮打完也不会再有庆祝 —— 玩家只能被恭喜一次。
 	_hint = Label.new()
-	_hint.text = HINT_TEXT
+	_hint.text = I18n.t(HINT_TEXT)
 	_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_hint.autowrap_mode = TextServer.AUTOWRAP_OFF   # 文案自带换行，避免把词从中间劈开
 	_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -128,7 +130,7 @@ func _ready() -> void:
 func open_with(entries: Array, progress) -> void:
 	_open = true
 	visible = true
-	_subtitle.text = "%d / %d 关　·　恭喜你，滚方块大师" % [entries.size(), entries.size()]
+	_subtitle.text = I18n.t("%d / %d 关　·　恭喜你，滚方块大师") % [entries.size(), entries.size()]
 	# 初始焦点落在第一个按钮上，遥控器/键盘立刻可用
 	var first: Node = _buttons.get_child(0) if _buttons.get_child_count() > 0 else null
 	if first is Button:
@@ -223,16 +225,16 @@ func _build_stats(entries: Array, progress) -> void:
 			shape_name = Shapes.display_name(str(e.get("shape", "")))
 
 	var rows: Array = [
-		["通关", "%d / %d 关" % [completed, total]],
-		["总步数", "%d 步" % total_moves],
-		["达最优", "%d 关" % optimal_count],
+		[I18n.t("通关"), I18n.t("%d / %d 关") % [completed, total]],
+		[I18n.t("总步数"), I18n.t("%d 步") % total_moves],
+		[I18n.t("达最优"), I18n.t("%d 关") % optimal_count],
 	]
 	if completed == total and optimal_count == total:
-		rows.append(["评价", "全关最优　·　无可挑剔"])
+		rows.append([I18n.t("评价"), I18n.t("全关最优　·　无可挑剔")])
 	elif optimal_count * 2 >= maxi(completed, 1):
-		rows.append(["评价", "相当漂亮"])
+		rows.append([I18n.t("评价"), I18n.t("相当漂亮")])
 	else:
-		rows.append(["评价", "通关达成"])
+		rows.append([I18n.t("评价"), I18n.t("通关达成")])
 	for row in rows:
 		_stat_lines.append("%s：%s" % [str(row[0]), str(row[1])])
 		var line := Label.new()

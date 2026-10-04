@@ -197,6 +197,8 @@ class Painter extends Control:
 		var goal_c := _cell_center(1, 0)
 		if not small:
 			out.append_array(_glow(goal_c, 0.95, Game.COLOR_GOAL))
+		out.append_array(_tile_at(0, 0, Game.COLOR_TILE_A))
+		out.append_array(_tile_at(0, 1, Game.COLOR_TILE_B))
 		out.append_array(_soft_shadow(_cell_center(0, 0), Vector2(0.62, 0.30)))
 		out.append_array(_tile_at(1, 0, Game.COLOR_GOAL, false))
 		out.append_array(_goal_frame(goal_c, small))
@@ -242,7 +244,12 @@ class Painter extends Control:
 		var o := Vector2(float(gx - gz), float(gx + gz) * 0.5)
 		var q := PackedVector2Array([
 			o + _p(0, 0, 0), o + _p(1, 0, 0), o + _p(1, 0, 1), o + _p(0, 0, 1)])
-		var out: Array = [{"pts": q, "fill": col, "line": col.darkened(0.38), "lw": OUTLINE}]
+		var drop := Vector2(0.0, 0.13)
+		var out: Array = [
+			{"pts": PackedVector2Array([q[1], q[2], q[2] + drop, q[1] + drop]), "fill": col.darkened(0.25)},
+			{"pts": PackedVector2Array([q[2], q[3], q[3] + drop, q[2] + drop]), "fill": col.darkened(0.40)},
+			{"pts": q, "fill": col, "line": col.darkened(0.24), "lw": OUTLINE * 0.7}]
+
 		if bevel:
 			out.append({"pts": PackedVector2Array([q[3], q[0], q[1]]),
 				"fill": col, "line": col.lightened(0.30), "only_line": true, "lw": OUTLINE * 0.9})

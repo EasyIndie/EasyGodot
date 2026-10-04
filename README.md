@@ -60,7 +60,7 @@ workflow/                跨游戏复用的平台（脚本、文档、pi 扩展�
 ## 快速开始
 
 ```bash
-# 跑全部测试（16 个套件，包含首发关卡曲线守卫）
+# 跑全部测试（19 个套件，包含关卡曲线、240 像素窄屏布局、多语言与主题切换）
 workflow/scripts/gf-test.sh
 
 # 首发自动门禁（加 --web 可生成 Web 候选，不部署）
@@ -99,6 +99,7 @@ workflow/scripts/gf-pages.sh
 | [07 MVP 状态](workflow/docs/07-mvp-status.md) | MVP 对照表、待办、坑与交接说明 |
 | [10 关卡机制升级](workflow/docs/10-level-mechanics.md) | 多块棋盘 + 机关（开关/桥/闸门/传送门/碎裂砖）、求解器如何自动适配、"机关是否承重"自动判据 |
 | [11 首发计划与验收](workflow/docs/11-first-release-plan.md) | 当前 MVP 范围、递增关卡节奏、Web 多设备验收、Android/iOS 发布门槛 |
+| [12 主题与多语言](workflow/docs/12-themes-and-i18n.md) | 主题配色、系统语言、中英文与新增语种流程 |
 | [13 手势输入改进](workflow/docs/13-touch-input.md) | 方向置信度、模糊轨迹纠正、多指隔离与手势回归测试 |
 
 ## CI / 发布
@@ -125,3 +126,5 @@ workflow/scripts/gf-pages.sh games/puzzle-core --deploy     # 强推到 gh-pages
 - [Noto Sans SC](https://fonts.google.com/noto/specimen/Noto+Sans+SC)（SIL OFL 1.1）
   —— 已用 `workflow/scripts/gf-font-subset.sh` 按项目实际用字裁剪为 **约 148KB 子集**
   （原字体 16.4MB），由 `tests/test_font.gd` 守卫生效
+
+画面主题与多语言：选关页底部可切换三套主题以及系统/中文/英文，偏好自动保存。扩展方式见 [主题与多语言](workflow/docs/12-themes-and-i18n.md)。

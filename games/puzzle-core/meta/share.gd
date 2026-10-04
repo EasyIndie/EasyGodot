@@ -8,6 +8,8 @@
 # 「我 9 步过了第 12 关，你来试试」比任何商店截图都有效。
 extends RefCounted
 
+const I18n = preload("res://meta/i18n.gd")
+
 # 没有可用的浏览器地址时（原生包内分享）落回这里：公网 Web 版
 const DEFAULT_BASE := "https://easyindie.github.io/EasyGodot/"
 
@@ -32,15 +34,15 @@ static func challenge_url(base: String, level_no: int, moves: int = -1) -> Strin
 
 static func share_text(level_no: int, moves: int, time_ms: int, url: String) -> String:
 	# 分享文案：先给成绩，再给链接。步数是主指标（解谜），用时是附带的。
-	var who: String = "我在《滚方块》第 %d 关" % maxi(level_no, 1)
+	var who: String = I18n.t("我在《滚方块》第 %d 关") % maxi(level_no, 1)
 	var score: String = ""
 	if moves > 0:
-		score = "%d 步" % moves
+		score = I18n.t("%d 步") % moves
 	if time_ms >= 0:
-		var secs: String = "%.1f 秒" % (float(time_ms) / 1000.0)
+		var secs: String = I18n.t("%.1f 秒") % (float(time_ms) / 1000.0)
 		score = secs if score == "" else (score + "（" + secs + "）")
-	var head: String = who + ("用了 " + score if score != "" else "卡住了")
-	return head + "，试试能不能超过我：\n" + url
+	var head: String = who + (I18n.t("用了 ") + score if score != "" else I18n.t("卡住了"))
+	return head + I18n.t("，试试能不能超过我：\n") + url
 
 
 static func parse_challenge(query: String, level_count: int) -> Dictionary:
@@ -83,21 +85,21 @@ static func parse_challenge(query: String, level_count: int) -> Dictionary:
 
 static func challenge_line(level_no: int, moves: int) -> String:
 	# 挑战模式下的目标提示（HUD 用）
-	var t: String = "好友挑战：第 %d 关" % maxi(level_no, 1)
+	var t: String = I18n.t("好友挑战：第 %d 关") % maxi(level_no, 1)
 	if moves > 0:
-		t += "　·　目标 %d 步" % moves
+		t += I18n.t("　·　目标 %d 步") % moves
 	return t
 
 
 static func result_line(moves: int, time_ms: int, target: int) -> String:
 	# 挑战完成时的对照文案：**必须说清输赢**，只说「你用了 10 步」等于没说
-	var head: String = "挑战完成：%d 步" % moves
+	var head: String = I18n.t("挑战完成：%d 步") % moves
 	if time_ms >= 0:
-		head += "（%.1f 秒）" % (float(time_ms) / 1000.0)
+		head += I18n.t("（%.1f 秒）") % (float(time_ms) / 1000.0)
 	if target <= 0:
 		return head
 	if moves < target:
-		return head + "　·　赢过对方 %d 步！" % (target - moves)
+		return head + I18n.t("　·　赢过对方 %d 步！") % (target - moves)
 	if moves == target:
-		return head + "　·　与对方打平"
-	return head + "　·　对方是 %d 步，再试试" % target
+		return head + I18n.t("　·　与对方打平")
+	return head + I18n.t("　·　对方是 %d 步，再试试") % target

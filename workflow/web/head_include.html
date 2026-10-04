@@ -1,3 +1,12 @@
+<script>
+(function () {
+  let preference = 'system', theme = 'mist';
+  try { preference = localStorage.getItem('gf-language') || preference; theme = localStorage.getItem('gf-theme') || theme; } catch (_) {}
+  const locale = preference === 'system' ? (navigator.language || 'en') : preference;
+  document.documentElement.lang = /^zh(?:[-_]|$)/i.test(locale) ? 'zh' : 'en';
+  document.documentElement.dataset.theme = ['mist', 'porcelain', 'candy'].includes(theme) ? theme : 'mist';
+})();
+</script>
 <!--
   head_include.html — 注入到 Godot 导出的 index.html <head> 里的一段 CSS + JS。
   由 workflow/scripts/gf-web-inject.sh 写进 export_presets.cfg 的 html/head_include，
@@ -90,7 +99,7 @@
   }
   #status-progress::-webkit-progress-bar { background: rgba(255, 255, 255, .09); border-radius: 999px; }
   #status-progress::-webkit-progress-value {
-    background: linear-gradient(90deg, #ffc06a, #ff8a3d, #ffc06a);
+    background: linear-gradient(90deg, #efb853, #ff9a4d, #b4ffe3);
     background-size: 220% 100%;
     border-radius: 999px;
     animation: gfShimmer 1.9s linear infinite;
@@ -106,6 +115,10 @@
     text-indent: .18em;
     color: #8fa3c4;
   }
+  html:lang(en) #status::before { content: "Roll the Block"; letter-spacing: .08em; }
+  html:lang(en) #status::after { content: "Loading…"; }
+  html[data-theme="candy"] #status-progress::-webkit-progress-value { background: linear-gradient(90deg, #ef9181, #b2a5dd, #b4ffe3); }
+  html[data-theme="porcelain"] #status-progress::-webkit-progress-value { background: linear-gradient(90deg, #dda351, #e0e5e8, #b4ffe3); }
   #status-notice {
     order: 4;
     background-color: #2a1c22 !important;
@@ -115,8 +128,8 @@
     padding: .7rem 1rem;
   }
   @keyframes gfFloat {
-    0%, 100% { transform: translateY(-1.2%); }
-    50%      { transform: translateY(1.2%); }
+    0%, 100% { transform: translateY(-1.2%) rotate(-2deg); }
+    50%      { transform: translateY(1.2%) rotate(2deg); }
   }
   @keyframes gfShimmer {
     from { background-position: 0 0; }

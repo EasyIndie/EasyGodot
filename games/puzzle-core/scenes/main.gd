@@ -1,6 +1,10 @@
 # main.gd — 主场景：摄像机 + 光照 + 环境 + Game + HUD + 关卡管理 + 选关 + 回放 + 输入桥接。
 extends Node3D
 
+const VisualTheme = preload("res://meta/visual_theme.gd")
+var _last_win_result: Dictionary = {}
+const I18n = preload("res://meta/i18n.gd")
+
 const Game = preload("res://scenes/game.gd")
 const Moves = preload("res://core/moves.gd")
 const Progress = preload("res://meta/progress.gd")
@@ -61,6 +65,7 @@ var _q_elapsed: float = 0.0
 # HUD 节点
 var level_label: Label
 var moves_label: Label
+var _hud_row: HFlowContainer
 var time_label: Label
 var win_label: Label
 var fail_label: Label
@@ -111,6 +116,8 @@ func _ready() -> void:
 		_quality_tier = RenderQuality.initial_tier(_touch_wanted_early(), lite_mode)
 	else:
 		_quality_tier = clampi(int(float(tier_arg)), 0, RenderQuality.TIERS - 1)
+	progress = Progress.new(_progress_path())
+	I18n.configure(progress.language_preference())
 	_apply_tv_ui_scale()
 	_setup_camera()
 	_setup_light()
@@ -120,10 +127,10 @@ func _ready() -> void:
 	_setup_transition()
 	_setup_touch_controls()
 	_setup_ending()
-	progress = Progress.new(_progress_path())
 	levels = _scan_levels()
 	_setup_level_select()
 	game = Game.new()
+	game.set_visual_theme(progress.visual_theme())
 	game.low_effects = lite_mode
 	game.name = "Game"
 	add_child(game)
@@ -139,6 +146,7 @@ func _ready() -> void:
 	# 必须在 project.godot 里把 application/config/quit_on_go_back 设为 false，
 	# 否则引擎会直接退出（表现就是「按一下返回 = 闪退」）。
 	get_tree().root.go_back_requested.connect(_on_back_requested)
+	_apply_visual_theme(progress.visual_theme())
 	_apply_render_quality()
 	_update_safe_area()
 	_refresh_bands()
@@ -293,6 +301,11 @@ func _notification(what: int) -> void:
 			_refresh_clock()
 			_reset_quality_sampling()
 		NOTIFICATION_APPLICATION_RESUMED, NOTIFICATION_APPLICATION_FOCUS_IN:
+			if progress != null and progress.language_preference() == "system":
+				var old_language: String = I18n.language
+				I18n.configure("system")
+				if I18n.language != old_language and game != null:
+					call_deferred("_refresh_language")
 			_app_paused = false
 			_refresh_clock()
 			_reset_quality_sampling()
@@ -352,6 +365,7 @@ func _update_clock_label(force: bool = false) -> void:
 		return
 	_clock_shown = tick
 	time_label.text = Leaderboard.format_clock(ms)
+	_fit_hud_label(time_label)
 
 
 func _apply_ghost_setting(on: bool) -> void:
@@ -440,13 +454,13 @@ func _on_share_requested(index: int) -> void:
 	last_share_text = text
 	DisplayServer.clipboard_set(text)
 	if level_select != null:
-		level_select.set_share_button_text("已复制链接")
+		level_select.set_share_button_text(I18n.t("已复制链接"))
 		# 两秒后恢复按钮文案（否则「已复制」会一直挂着，看起来像坏了）
 		var tw := create_tween()
 		tw.tween_interval(2.0)
 		tw.tween_callback(func() -> void:
 			if level_select != null:
-				level_select.set_share_button_text("分享本关"))
+				level_select.set_share_button_text(I18n.t("分享本关")))
 
 
 func _finish_challenge(res: Dictionary) -> void:
@@ -454,7 +468,7 @@ func _finish_challenge(res: Dictionary) -> void:
 	# 只报出对照结果 + 明确的下一步
 	var target: int = int(_challenge.get("moves", -1))
 	win_label.text = Share.result_line(int(res["move_count"]), int(res.get("time_ms", -1)), target) \
-		+ "　·　R 重玩 / L 选关"
+		+ I18n.t("　·　R 重玩 / L 选关")
 
 
 func _is_tv_like() -> bool:
@@ -536,13 +550,15 @@ func _apply_hud_insets() -> void:
 	# 可用宽度按比例分给两块面板：左边拿大头（关卡文字更长），右边保证最小可读宽度
 	var avail: float = maxf(vp.x - sl - sr, 120.0)
 	var gap: float = 12.0
-	var lw: float = clampf(minf(LEFT_PANEL_W, (avail - gap) * 0.45), 96.0, LEFT_PANEL_W)
-	var rw: float = clampf(minf(RIGHT_PANEL_W, avail - gap - lw), 96.0, RIGHT_PANEL_W)
+	var compact: bool = avail < 280.0
+	var min_panel_width: float = 72.0 if compact else 96.0
+	var lw: float = clampf(minf(LEFT_PANEL_W, (avail - gap) * (0.35 if compact else 0.45)), min_panel_width, LEFT_PANEL_W)
+	var rw: float = clampf(minf(RIGHT_PANEL_W, avail - gap - lw), min_panel_width, RIGHT_PANEL_W)
 	var narrow: bool = vp.x < 620.0
 	# 窄屏同时缩小字号 + 缩短文案（宁可信息少一点，也不要溢出错行）
-	level_label.add_theme_font_size_override("font_size", 15 if narrow else 16)
-	moves_label.add_theme_font_size_override("font_size", 18 if narrow else 19)
-	time_label.add_theme_font_size_override("font_size", 14 if narrow else 15)
+	level_label.add_theme_font_size_override("font_size", 13 if compact else 15 if narrow else 16)
+	moves_label.add_theme_font_size_override("font_size", 16 if compact else 18 if narrow else 19)
+	time_label.add_theme_font_size_override("font_size", 12 if compact else 14 if narrow else 15)
 	best_label.add_theme_font_size_override("font_size", 10 if narrow else 11)
 	_hud_narrow = narrow
 	left_panel.offset_left = sl
@@ -654,11 +670,13 @@ func _refresh_bands() -> void:
 	var sr: float = float(_safe_insets.get("right", 0.0))
 	var st: float = float(_safe_insets.get("top", 0.0))
 	var sb: float = float(_safe_insets.get("bottom", 0.0))
+	var hud_bottom: float = maxf(left_panel.get_global_rect().end.y, right_panel.get_global_rect().end.y)
+	var band_top: float = maxf(st + 82.0, hud_bottom + 12.0)
 	if lesson_label != null:
 		lesson_label.offset_left = sl + 16.0
 		lesson_label.offset_right = -(sr + 16.0)
-		lesson_label.offset_top = st + 82.0
-		lesson_label.offset_bottom = st + 138.0
+		lesson_label.offset_top = band_top
+		lesson_label.offset_bottom = band_top + 56.0
 		lesson_label.add_theme_font_size_override("font_size", 16)
 		if touch_on and vp.x > vp.y:
 			# 横屏棋盘靠近顶部；教学放在底部动作区上方的一行空隙。
@@ -670,7 +688,7 @@ func _refresh_bands() -> void:
 	var band_h: float = 46.0
 	var y: float
 	if at_top:
-		y = st + 82.0            # 让开 HUD 面板
+		y = band_top            # 让开可能换行的 HUD 面板
 	else:
 		var occupied: float = sb
 		if touch_on:
@@ -688,15 +706,21 @@ func _refresh_bands() -> void:
 		l.anchor_right = 1.0
 		l.offset_left = sl + 12.0
 		l.offset_right = -(sr + 12.0)
+		var available_w: float = maxf(vp.x - sl - sr - 24.0, 1.0)
+		if l == win_label:
+			l.add_theme_font_size_override("font_size", 16 if available_w < 260.0 else 20 if available_w < 520.0 else 28)
+		elif l == fail_label:
+			l.add_theme_font_size_override("font_size", 16 if available_w < 260.0 else 20 if available_w < 520.0 else 24)
+		var label_h: float = maxf(band_h, l.get_minimum_size().y)
 		l.anchor_top = 0.0 if at_top else 1.0
 		l.anchor_bottom = l.anchor_top
 		# 注意：底部锚点下的 offset 是**相对屏幕底边**的偏移（负值向上）。
 		# 早先把屏幕绝对坐标直接写进 offset 直接把提示带到屏幕外了（top=1040 / vp=720）。
 		if at_top:
 			l.offset_top = y
-			l.offset_bottom = y + band_h
+			l.offset_bottom = y + label_h
 		else:
-			l.offset_top = y - band_h - vp.y
+			l.offset_top = y - label_h - vp.y
 			l.offset_bottom = y - vp.y
 	var base: String
 	if touch_on:
@@ -711,9 +735,9 @@ func _refresh_bands() -> void:
 		return
 	elif _is_tv_like():
 		# 电视遥控器上没有 R / L / V，写了等于没写 —— 只提示真正可用的键
-		base = "遥控器方向键移动　·　确认重开或继续　·　返回选关　·　掉出棋盘或落入空洞会坠落"
+		base = I18n.t("遥控器方向键移动　·　确认重开或继续　·　返回选关　·　掉出棋盘或落入空洞会坠落")
 	else:
-		base = "方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     G 影子     ·     掉出棋盘或落入空洞会坠落"
+		base = I18n.t("方向键 / WASD 移动     R 重开     L 选关     V 看最佳回放     G 影子     ·     掉出棋盘或落入空洞会坠落")
 	help_label.text = base
 	# 同一条带只显示优先级最高的一条
 	help_label.visible = not (win_label.visible or fail_label.visible or replay_label.visible)
@@ -823,14 +847,14 @@ func lesson_text() -> String:
 			kinds.append(str(d["kind"]))
 	if kinds.has("portal"):
 		if kinds.has("bridge"):
-			return "先开桥，再利用传送门调整路线。传送后姿态不变。"
-		return "传送门保持方块姿态，先想好出口怎么走。"
+			return I18n.t("先开桥，再利用传送门调整路线。传送后姿态不变。")
+		return I18n.t("传送门保持方块姿态，先想好出口怎么走。")
 	if kinds.has("gate"):
-		return "踩开关会改变道路；留意哪些格子消失了。"
+		return I18n.t("踩开关会改变道路；留意哪些格子消失了。")
 	if kinds.has("bridge"):
-		return "踩开关打开桥，再翻滚到另一边。"
+		return I18n.t("踩开关打开桥，再翻滚到另一边。")
 	if current_index <= 1:
-		return "竖立在发光目标格上即可通关；平躺不算。"
+		return I18n.t("竖立在发光目标格上即可通关；平躺不算。")
 	return ""
 
 
@@ -855,7 +879,7 @@ func _transition_to(index: int) -> void:
 	# 2) 暗幕遮挡下完成换关
 	_do_load(index)
 	_set_scene_offset(SLIDE_IN)
-	transition_label.text = "关卡 %d / %d" % [index + 1, levels.size()]
+	transition_label.text = I18n.t("关卡 %d / %d") % [index + 1, levels.size()]
 	transition_label.modulate.a = 1.0
 	await get_tree().create_timer(0.3).timeout
 	# 3) 新棋盘降入 + 暗幕淡出
@@ -919,6 +943,8 @@ func _setup_level_select() -> void:
 	level_select.celebration_requested.connect(_on_celebration_requested)
 	level_select.ghost_toggled.connect(_on_ghost_toggled)
 	level_select.pad_toggled.connect(_on_pad_toggled)
+	level_select.theme_requested.connect(_on_theme_requested)
+	level_select.language_requested.connect(_on_language_requested)
 	level_select.share_requested.connect(_on_share_requested)
 
 
@@ -1054,7 +1080,7 @@ func _play_replay() -> void:
 	for i in range(moves.size()):
 		if not _replaying:
 			break
-		replay_label.text = "回放　%d / %d" % [i + 1, moves.size()]
+		replay_label.text = I18n.t("回放　%d / %d") % [i + 1, moves.size()]
 		replay_label.visible = true
 		_refresh_bands()
 		# 与手动操作完全同源的动画（含等它演完）
@@ -1068,7 +1094,7 @@ func _play_replay() -> void:
 		# 连续播放在眼里就是「没有动画、一下一下地跳」。
 		await get_tree().create_timer(REPLAY_BEAT).timeout
 
-	replay_label.text = "回放结束"
+	replay_label.text = I18n.t("回放结束")
 	await get_tree().create_timer(0.7).timeout
 	_replaying = false
 	if touch_controls != null:
@@ -1110,7 +1136,7 @@ func _on_won() -> void:
 	_update_hud()
 	# 回放中到达终点：只提示，不记录进度、不自动换关
 	if _replaying:
-		replay_label.text = "回放到达终点　·　%d 步" % game.move_count
+		replay_label.text = I18n.t("回放到达终点　·　%d 步") % game.move_count
 		replay_label.visible = true
 		_refresh_bands()
 		await _win_beat()
@@ -1152,16 +1178,18 @@ func _on_won() -> void:
 
 func _win_text(res: Dictionary) -> String:
 	# 步数纪录与时间纪录可以各自独立地被打破（见 progress.gd 顶部的说明）
-	var base := "通关! 步数: %d" % int(res["move_count"])
+	var detail_sep := "\n" if get_viewport().get_visible_rect().size.x < 520.0 else "　·　"
+	_last_win_result = res.duplicate()
+	var base := I18n.t("通关! 步数: %d") % int(res["move_count"])
 	var t: int = int(res.get("time_ms", -1))
 	if t >= 0:
-		base += "　·　用时 %s" % Leaderboard.format_time(t)
+		base += I18n.t("　·　用时 %s") % Leaderboard.format_time(t)
 	if bool(res["first_clear"]):
-		return base + "　·　首次通关"
+		return base + detail_sep + I18n.t("首次通关")
 	if bool(res["improved"]):
-		return base + "　·　步数新纪录!（原 %d）" % int(res["prev_best"])
+		return base + detail_sep + I18n.t("步数新纪录!（原 %d）") % int(res["prev_best"])
 	if bool(res.get("time_improved", false)):
-		return base + "　·　时间新纪录!（原 %s）" % Leaderboard.format_time(int(res.get("prev_best_time", -1)))
+		return base + detail_sep + I18n.t("时间新纪录!（原 %s）") % Leaderboard.format_time(int(res.get("prev_best_time", -1)))
 	return base
 
 
@@ -1179,18 +1207,18 @@ func _on_fell() -> void:
 	_refresh_clock()   # 坠落即停表（等下一帧兜底会多算一帧）
 	_update_hud()
 	if _replaying:
-		fail_label.text = "回放异常结束　（Esc 退出）"
+		fail_label.text = I18n.t("回放异常结束　（Esc 退出）")
 		fail_label.visible = true
 		_refresh_bands()
 		return
 	# 触屏上没有 R 键，提示必须指向屏幕上那个按钮（只说“重开”等于没说）
 	if touch_controls != null and touch_controls.is_shown():
-		fail_label.text = "坠落！方块掉出了棋盘　·　点右下「重开」"
+		fail_label.text = I18n.t("坠落！方块掉出了棋盘　·　点右下「重开」")
 	elif _is_tv_like():
 		# 遥控器上没有 R 键，照抄桌面文案等于告诉玩家一个不存在的键
-		fail_label.text = "坠落！方块掉出了棋盘　（按确认键重开）"
+		fail_label.text = I18n.t("坠落！方块掉出了棋盘　（按确认键重开）")
 	else:
-		fail_label.text = "坠落！方块掉出了棋盘　（按 R 重开）"
+		fail_label.text = I18n.t("坠落！方块掉出了棋盘　（按 R 重开）")
 	fail_label.visible = true
 	_refresh_bands()
 
@@ -1202,7 +1230,7 @@ func _update_hud() -> void:
 	# 通关进度（已通关 x/20、进度条、本轮/历史口径）全部搬到选关界面：
 	#   · 它不影响当前这一局怎么玩，却占了左上角一整块
 	#   · 口径还很绕（本轮 vs 曾经通关），放在需要读的地方（选关）才讲得清
-	level_label.text = "第 %d 关" % [current_index + 1]
+	level_label.text = I18n.t("第 %d 关") % [current_index + 1]
 	if challenge_label != null:
 		challenge_label.visible = challenge_active()
 		if challenge_active():
@@ -1210,7 +1238,8 @@ func _update_hud() -> void:
 	# 「回放」按钮只在本关**确实有回放记录**时出现（没有记录就不留死按钮）
 	if touch_controls != null:
 		touch_controls.set_replay_available(progress.has_replay(_level_key(current_index)))
-	moves_label.text = "步数 %d" % game.move_count
+	moves_label.text = I18n.t("步数 %d") % game.move_count
+	_fit_hud_label(moves_label)
 	_update_clock_label(true)
 
 	# 第二行：本机记录（最佳步数 / 最快时间）。
@@ -1224,25 +1253,18 @@ func _update_hud() -> void:
 		optimal = int(entries[current_index].get("optimal", -1))
 	var lines: Array = []
 	if best > 0:
-		var step_txt: String = "最佳 %d" % best
+		var step_txt: String = I18n.t("最佳 %d") % best
 		if optimal > 0 and best == optimal:
-			step_txt += "（已最优）"      # 打到理论最少步时的即时褒奖
+			step_txt += I18n.t("（已最优）")      # 打到理论最少步时的即时褒奖
 		lines.append(step_txt)
 	var bt: int = progress.best_time(key)
 	if bt >= 0:
-		lines.append("最快 %s" % Leaderboard.format_clock(bt))
+		lines.append(I18n.t("最快 %s") % Leaderboard.format_clock(bt))
 	# 没有记录时**整行不显示**（连占位都不要）：面板高度随之收成一行。
 	# 有记录时它才长出来 —— 信息在真正存在的时候才出现。
 	best_label.text = "　·　".join(lines)
 	best_label.visible = lines.size() > 0
-	if right_panel != null:
-		# 面板高度**跟着内容走**：没有记录就只占一行。
-		# 这里直接改 offset（不能回头调 _apply_hud_insets：它末尾会调用 _update_hud，
-		# 会绕成无限递归）；只在值真的不同才写，避免每帧把布局标脏。
-		var want_bottom: float = right_panel.offset_top + \
-			(RIGHT_PANEL_H if best_label.visible else RIGHT_PANEL_H_ONE_LINE)
-		if not is_equal_approx(right_panel.offset_bottom, want_bottom):
-			right_panel.offset_bottom = want_bottom
+	_sync_hud_height()
 
 
 func _wait_for_anim() -> void:
@@ -1455,6 +1477,7 @@ func _setup_hud() -> void:
 	# ── 左上：关卡 + 进度条 ────────────────────────────
 	var left := _make_panel(hud)
 	left_panel = left
+	left.resized.connect(_refresh_bands)
 	left.anchor_left = 0.0
 	left.anchor_top = 0.0
 	left.offset_left = HUD_MARGIN
@@ -1469,6 +1492,7 @@ func _setup_hud() -> void:
 	col.add_child(level_label)
 	# 好友挑战的目标（只在挑战模式出现；它不是「持续状态」，是启动参数带来的上下文）
 	challenge_label = Label.new()
+	challenge_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	challenge_label.add_theme_font_size_override("font_size", 14)
 	challenge_label.add_theme_color_override("font_color", Color(0.55, 1.0, 0.78))
 	challenge_label.visible = false
@@ -1478,6 +1502,8 @@ func _setup_hud() -> void:
 	# ── 右上：步数 ──────────────────────────────────
 	var right := _make_panel(hud)
 	right_panel = right
+	right.resized.connect(_refresh_bands)
+	right.minimum_size_changed.connect(func() -> void: call_deferred("_sync_hud_height"))
 	right.anchor_left = 1.0
 	right.anchor_right = 1.0
 	right.offset_left = -(HUD_MARGIN + RIGHT_PANEL_W)
@@ -1490,9 +1516,11 @@ func _setup_hud() -> void:
 	# 早先是三行各占一行，"当前"和"记录"混在一起，还要更多高度。
 	var rcol := VBoxContainer.new()
 	rcol.add_theme_constant_override("separation", 2)
-	var rrow := HBoxContainer.new()
-	rrow.add_theme_constant_override("separation", 8)
-	rrow.alignment = BoxContainer.ALIGNMENT_CENTER
+	var rrow := HFlowContainer.new()
+	_hud_row = rrow
+	rrow.add_theme_constant_override("h_separation", 8)
+	rrow.add_theme_constant_override("v_separation", 2)
+	rrow.alignment = FlowContainer.ALIGNMENT_CENTER
 	moves_label = Label.new()
 	moves_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	moves_label.add_theme_font_size_override("font_size", 20)
@@ -1506,6 +1534,7 @@ func _setup_hud() -> void:
 	rrow.add_child(time_label)
 	rcol.add_child(rrow)
 	best_label = Label.new()
+	best_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	best_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	best_label.add_theme_font_size_override("font_size", 11)
 	best_label.add_theme_color_override("font_color", Color(0.62, 0.70, 0.86))
@@ -1562,6 +1591,8 @@ func _make_status(hud: CanvasLayer, size: int, color: Color) -> Label:
 	# 提示带里的一条文字。位置不在这里定，由 _refresh_bands() 统一安排，
 	# 避开「各处硬写 y 偏移、改一个地方就要满处找」的维护问题。
 	var l := Label.new()
+	# 状态文字不能用自身的单行长度撑开窄屏布局。
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -1574,3 +1605,78 @@ func _make_status(hud: CanvasLayer, size: int, color: Color) -> Label:
 	l.visible = false
 	hud.add_child(l)
 	return l
+
+
+func _apply_visual_theme(id: String) -> void:
+	var colors: Dictionary = VisualTheme.palette(id)
+	if game != null:
+		game.set_visual_theme(id)
+	if backdrop != null:
+		for part in ["top", "mid", "bottom"]:
+			backdrop.material_override.set_shader_parameter(part + "_color", colors["bg_" + part])
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("try { localStorage.setItem('gf-theme', %s); } catch (_) {}" % JSON.stringify(VisualTheme.valid(id)), true)
+
+func _on_theme_requested() -> void:
+	progress.set_visual_theme(VisualTheme.next(progress.visual_theme()))
+	_apply_visual_theme(progress.visual_theme())
+	level_select._theme_btn.text = I18n.t("主题：%s") % VisualTheme.title(progress.visual_theme())
+
+func _on_language_requested() -> void:
+	progress.set_language_preference(I18n.next_preference(progress.language_preference()))
+	I18n.configure(progress.language_preference())
+	_refresh_language()
+
+func _refresh_language() -> void:
+	# 重建菜单和操作文案，不重载关卡、计时器或玩家方块。
+	var menu_open: bool = level_select.is_open()
+	var celebration_open: bool = ending.is_open()
+	var scroll_position: int = level_select._scroll.scroll_vertical
+	level_select.visible = false
+	level_select.queue_free()
+	_setup_level_select()
+	for i in range(entries.size()):
+		entries[i]["title"] = Campaign.title(i)
+	if menu_open:
+		_open_level_select()
+		level_select._scroll.set_deferred("scroll_vertical", scroll_position)
+	if touch_controls != null:
+		touch_controls._hint_label.text = I18n.t(TouchControls.HINT_TEXT)
+		for pair in [[touch_controls._action_buttons[0], "重开"], [touch_controls._action_buttons[1], "选关"], [touch_controls._action_buttons[2], "回放"]]:
+			pair[0].text = I18n.t(pair[1])
+		touch_controls.set_replay_playing(_replaying)
+		touch_controls._apply_layout()
+	_update_hud()
+	if win_label.visible and not _last_win_result.is_empty():
+		win_label.text = _win_text(_last_win_result)
+	if fail_label.visible:
+		fail_label.text = I18n.t("坠落！方块掉出了棋盘　·　点右下「重开」") if _touch_active else I18n.t("坠落！方块掉出了棋盘　（按 R 重开）")
+	lesson_label.text = lesson_text()
+	_refresh_bands()
+	ending.queue_free()
+	_setup_ending()
+	if celebration_open:
+		ending.open_with(entries, progress)
+
+
+func _fit_hud_label(label: Label) -> void:
+	if right_panel == null:
+		return
+	var width: float = maxf(right_panel.size.x - 28.0, 1.0)
+	var font: Font = label.get_theme_font("font")
+	var font_size: int = label.get_theme_font_size("font_size")
+	while font_size > 10 and font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > width:
+		font_size -= 1
+	if font_size != label.get_theme_font_size("font_size"):
+		label.add_theme_font_size_override("font_size", font_size)
+
+
+func _sync_hud_height() -> void:
+	if right_panel == null or best_label == null:
+		return
+	# 换行高度要随容器重新排版同步，避免初始零宽度测量后一直保留过高面板。
+	var height: float = maxf(RIGHT_PANEL_H if best_label.visible else RIGHT_PANEL_H_ONE_LINE,
+		right_panel.get_combined_minimum_size().y)
+	var bottom: float = right_panel.offset_top + height
+	if not is_equal_approx(right_panel.offset_bottom, bottom):
+		right_panel.offset_bottom = bottom

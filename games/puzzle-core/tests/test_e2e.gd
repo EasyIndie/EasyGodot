@@ -21,6 +21,7 @@ const SUITE_SAVE := "user://test_e2e_progress.json"
 
 
 func _init() -> void:
+	ProjectSettings.set_setting("puzzle/system_locale_override", "zh")
 	_run()
 
 
@@ -951,9 +952,10 @@ func _test_ghost() -> void:
 		var mi := c as MeshInstance3D
 		if mi.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
 			casting = true
-		var bm := (mi.mesh as BoxMesh)
-		if bm != null and (bm.material as StandardMaterial3D) != null:
-			if (bm.material as StandardMaterial3D).albedo_color.a > 0.7:
+		var material := mi.material_override as StandardMaterial3D
+		check(material != null, "影子材质存在")
+		if material != null:
+			if material.albedo_color.a > 0.7:
 				translucent = false
 	check(translucent, "影子必须是半透明的（否则会被当成实体方块）")
 	check(not casting, "影子不投影（影子不该在地面上再投一层影子）")

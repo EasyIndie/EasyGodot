@@ -10,11 +10,15 @@
 #   可挑战 → 显示参考（最优）步数
 extends CanvasLayer
 
+const I18n = preload("res://meta/i18n.gd")
+
 const Leaderboard = preload("res://meta/leaderboard.gd")
 const UiLayout = preload("res://meta/ui_layout.gd")
 const Shapes = preload("res://core/shapes.gd")
 
 signal level_chosen(index: int)
+signal theme_requested
+signal language_requested
 signal closed
 signal reset_requested
 signal ghost_toggled(on: bool)
@@ -50,6 +54,8 @@ var _margin: MarginContainer = null
 var _hint: Label
 var _reset_btn: Button
 var _ghost_btn: Button
+var _theme_btn: Button
+var _language_btn: Button
 var _pad_btn: Button
 var _share_btn: Button
 var _ghost_on: bool = false
@@ -63,12 +69,20 @@ var _current: int = 0
 var _content: VBoxContainer
 var _center: CenterContainer
 var _privacy: AcceptDialog
+var _scroll_touch: int = -1
+var _scroll_mouse := false
+var _scroll_start := Vector2.ZERO
+var _scroll_origin := 0
+var _scroll_dragged := false
+var _scroll_button: Button = null
+var _seen_touch := false
 var _scroll: ScrollContainer
 
 
 func _ready() -> void:
 	layer = 20  # 盖在 HUD / 过渡层之上
 	visible = false
+	set_process_input(false)
 
 	var shade := ColorRect.new()
 	shade.color = Color(0.03, 0.04, 0.08, 0.95)
@@ -104,7 +118,7 @@ func _ready() -> void:
 	center.add_child(box)
 
 	var title := Label.new()
-	title.text = "选择关卡"
+	title.text = I18n.t("选择关卡")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 30)
 	title.add_theme_color_override("font_color", Color(0.94, 0.96, 1.0))
@@ -148,7 +162,7 @@ func _ready() -> void:
 	box.add_child(row)
 
 	_back_btn = Button.new()
-	_back_btn.text = "返回游戏"
+	_back_btn.text = I18n.t("返回游戏")
 	_back_btn.focus_mode = Control.FOCUS_NONE
 	_back_btn.add_theme_color_override("font_color", FG)
 	_back_btn.add_theme_color_override("font_hover_color", Color(1, 1, 1))
@@ -161,7 +175,7 @@ func _ready() -> void:
 	# 「回顾通关」：只在全部通关后出现。庆祝动画不该是一次性的，
 	# 但也不该强行弹给玩家（那会变成“每次通关都被恭喜”）。
 	_celebrate_btn = Button.new()
-	_celebrate_btn.text = "回顾通关"
+	_celebrate_btn.text = I18n.t("回顾通关")
 	_celebrate_btn.visible = false
 	_celebrate_btn.focus_mode = Control.FOCUS_NONE
 	_celebrate_btn.add_theme_color_override("font_color", Color(0.82, 0.92, 1.0))
@@ -172,7 +186,7 @@ func _ready() -> void:
 	row.add_child(_celebrate_btn)
 
 	_share_btn = Button.new()
-	_share_btn.text = "分享本关"
+	_share_btn.text = I18n.t("分享本关")
 	_share_btn.flat = true
 	_share_btn.focus_mode = Control.FOCUS_NONE
 	_share_btn.add_theme_font_size_override("font_size", 14)
@@ -182,7 +196,7 @@ func _ready() -> void:
 	row.add_child(_share_btn)
 
 	_ghost_btn = Button.new()
-	_ghost_btn.text = "影子: 关"
+	_ghost_btn.text = I18n.t("影子: 关")
 	_ghost_btn.flat = true
 	_ghost_btn.focus_mode = Control.FOCUS_NONE
 	_ghost_btn.add_theme_font_size_override("font_size", 14)
@@ -194,7 +208,7 @@ func _ready() -> void:
 	# 方向键开关：手势是主要输入，方向键是"备选操作方式"。
 	# 放在选关界面而不是游戏画面里 —— 游戏画面上的每一样东西都必须是常用的。
 	_pad_btn = Button.new()
-	_pad_btn.text = "方向键: 关"
+	_pad_btn.text = I18n.t("方向键: 关")
 	_pad_btn.flat = true
 	_pad_btn.focus_mode = Control.FOCUS_NONE
 	_pad_btn.add_theme_font_size_override("font_size", 14)
@@ -204,7 +218,7 @@ func _ready() -> void:
 	row.add_child(_pad_btn)
 
 	_reset_btn = Button.new()
-	_reset_btn.text = "重置进度"
+	_reset_btn.text = I18n.t("重置进度")
 	_reset_btn.flat = true
 	_reset_btn.focus_mode = Control.FOCUS_NONE
 	_reset_btn.add_theme_font_size_override("font_size", 14)
@@ -213,19 +227,28 @@ func _ready() -> void:
 	_reset_btn.pressed.connect(_on_reset_pressed)
 	row.add_child(_reset_btn)
 
+	_theme_btn = Button.new()
+	_theme_btn.custom_minimum_size.y = 44.0
+	_theme_btn.pressed.connect(func() -> void: theme_requested.emit())
+	box.add_child(_theme_btn)
+	_language_btn = Button.new()
+	_language_btn.custom_minimum_size.y = 44.0
+	_language_btn.pressed.connect(func() -> void: language_requested.emit())
+	box.add_child(_language_btn)
+
 	var privacy_btn := Button.new()
-	privacy_btn.text = "隐私政策"
+	privacy_btn.text = I18n.t("隐私政策")
 	privacy_btn.flat = true
 	privacy_btn.custom_minimum_size.y = 44.0
 	privacy_btn.pressed.connect(func() -> void: _privacy.popup_centered_clamped(Vector2i(340, 330), 0.85))
 	box.add_child(privacy_btn)
 	_privacy = AcceptDialog.new()
-	_privacy.title = "隐私政策"
+	_privacy.title = I18n.t("隐私政策")
 	_privacy.dialog_autowrap = true
-	_privacy.dialog_text = "本机保存进度、成绩、回放和偏好；游戏不上传记录。\n\n无账号、广告或追踪 SDK。\n\n可重置进度删除记录。分享由你主动发送。\n\n完整政策、Web 访问日志说明与支持见在线页面。"
+	_privacy.dialog_text = I18n.t("本机保存进度、成绩、回放和偏好；游戏不上传记录。\n\n无账号、广告或追踪 SDK。\n\n可重置进度删除记录。分享由你主动发送。\n\n完整政策、Web 访问日志说明与支持见在线页面。")
 	_privacy.get_label().autowrap_mode = TextServer.AUTOWRAP_ARBITRARY
-	_privacy.get_ok_button().text = "关闭"
-	_privacy.add_button("在线政策", false, "policy")
+	_privacy.get_ok_button().text = I18n.t("关闭")
+	_privacy.add_button(I18n.t("在线政策"), false, "policy")
 	_privacy.custom_action.connect(func(action: String) -> void:
 		if action == "policy":
 			OS.shell_open("https://easyindie.github.io/EasyGodot/privacy.html"))
@@ -237,6 +260,8 @@ func _ready() -> void:
 # ── 对外 ───────────────────────────────────────────────
 
 func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
+	_theme_btn.text = I18n.t("主题：%s") % preload("res://meta/visual_theme.gd").title(p_progress.visual_theme())
+	_language_btn.text = I18n.t("语言：%s") % I18n.preference_title(p_progress.language_preference())
 	_progress = p_progress
 	_current = clampi(p_current, 0, maxi(entries.size() - 1, 0))
 	_keys.clear()
@@ -267,6 +292,7 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 	_show_detail(_current)
 	_set_confirm(false)
 	visible = true
+	set_process_input(true)
 	if _cards.size() > 0:
 		_cards[clampi(_current, 0, _cards.size() - 1)].grab_focus()
 	if _current == 0:
@@ -277,6 +303,8 @@ func close() -> void:
 	if not visible:
 		return
 	visible = false
+	set_process_input(false)
+	_cancel_scroll_drag()
 	_set_confirm(false)
 	closed.emit()
 
@@ -338,6 +366,8 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 	var shape := Label.new()
 	# 形状名统一走注册表，这里不再有任何 if id == ...（加形状只需改 core/shapes.gd）
 	shape.text = str(entry.get("title", Shapes.display_name(str(entry.get("shape", "domino")))))
+	shape.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	shape.max_lines_visible = 2
 	shape.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	shape.add_theme_font_size_override("font_size", 11)
 	shape.add_theme_color_override("font_color", FG_DIM)
@@ -348,21 +378,21 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	status.add_theme_font_size_override("font_size", 12)
 	if not unlocked:
-		status.text = "锁定"
+		status.text = I18n.t("锁定")
 		status.add_theme_color_override("font_color", FG_DIM)
 	elif done:
-		status.text = "最佳 %d" % best
+		status.text = I18n.t("最佳 %d") % best
 		status.add_theme_color_override("font_color", FG_DONE)
 	elif ever:
 		# 历史通关过、本轮还没重打：记录照旧展示，但颜色暗一档表示“本轮未通关”。
 		# （「再玩一遍」清的是本轮进度而不是记录，卡片上必须看得出来）
-		status.text = "最佳 %d" % best
+		status.text = I18n.t("最佳 %d") % best
 		status.add_theme_color_override("font_color", FG_EVER)
 	elif optimal > 0:
-		status.text = "参考 %d" % optimal
+		status.text = I18n.t("参考 %d") % optimal
 		status.add_theme_color_override("font_color", FG_OPT)
 	else:
-		status.text = "未通关"
+		status.text = I18n.t("未通关")
 		status.add_theme_color_override("font_color", FG_OPT)
 	status.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	col.add_child(status)
@@ -381,6 +411,7 @@ func safe_insets() -> Dictionary:
 
 
 func _apply_layout() -> void:
+	_cancel_scroll_drag()
 	# 按视口自适应：列数随宽度降级、卡片与字号按可用宽度反算（窄屏/竖屏不溢出）
 	var vp: Vector2 = get_viewport().get_visible_rect().size
 	# 避开安全区：把 inset 转成内容边距，而不是把控件硬挪（否则会与居中布局打架）
@@ -409,9 +440,9 @@ func _apply_layout() -> void:
 	_hint.add_theme_font_size_override("font_size", int(14.0 * k))
 	# 提示文案：触屏上没有键盘，不能写 Esc / Enter
 	if touch_mode:
-		_hint.text = "点按卡片开始　·　底部「返回游戏」关闭"
+		_hint.text = I18n.t("点按卡片开始　·　底部「返回游戏」关闭")
 	else:
-		_hint.text = "← → ↑ ↓ 选择     Enter / 点击 开始     Esc 返回"
+		_hint.text = I18n.t("← → ↑ ↓ 选择     Enter / 点击 开始     Esc 返回")
 	# 按钮：触屏要够大好点（高度按视口自适应，并留出最小可点面积）
 	var btn_h: float = clampf(vp.y * 0.055, 44.0 if touch_mode else 34.0, 52.0)
 	for button in [_share_btn, _ghost_btn, _pad_btn]:
@@ -492,7 +523,7 @@ func share_button() -> Button:
 
 func ghost_button_text() -> String:
 	# 「上次的走法」= 把自己的最佳记录当影子滚一遍（记忆辅助，不是比赛）
-	return "影子: " + ("开" if _ghost_on else "关")
+	return I18n.t("影子: ") + (I18n.t("开") if _ghost_on else I18n.t("关"))
 
 
 func set_ghost_state(on: bool) -> void:
@@ -503,7 +534,7 @@ func set_ghost_state(on: bool) -> void:
 
 func pad_button_text() -> String:
 	# 与影子同款：文字直接说清当前状态（"开/关"比一个开关图标更不容易误读）
-	return "方向键: " + ("开" if _pad_on else "关")
+	return I18n.t("方向键: ") + (I18n.t("开") if _pad_on else I18n.t("关"))
 
 
 func set_pad_state(on: bool) -> void:
@@ -534,7 +565,7 @@ func _on_reset_pressed() -> void:
 
 func _set_confirm(on: bool) -> void:
 	_confirm_reset = on
-	_reset_btn.text = "再点一次确认重置!" if on else "重置进度"
+	_reset_btn.text = I18n.t("再点一次确认重置!") if on else I18n.t("重置进度")
 
 
 func _process(delta: float) -> void:
@@ -546,3 +577,90 @@ func _process(delta: float) -> void:
 			_set_confirm(false)
 	elif _confirm_timer != 0.0:
 		_confirm_timer = 0.0
+
+
+# 卡片按钮会消费 GUI 输入，因此在按钮之前接住拖动；短点按才交给原按钮动作。
+# 滚轮和右侧滚动条继续由 ScrollContainer 原生处理。
+func _input(event: InputEvent) -> void:
+	if not visible or (_privacy != null and _privacy.visible):
+		_cancel_scroll_drag()
+		return
+	if event is InputEventScreenTouch:
+		_seen_touch = true
+		if event.pressed:
+			if _scroll_touch == -1 and _begin_scroll_drag(event.position):
+				_scroll_touch = event.index
+				get_viewport().set_input_as_handled()
+		elif event.index == _scroll_touch:
+			_end_scroll_drag(event.position, not event.canceled)
+			get_viewport().set_input_as_handled()
+		if _scroll_touch != -1:
+			get_viewport().set_input_as_handled()
+	elif event is InputEventScreenDrag:
+		if event.index == _scroll_touch:
+			_move_scroll_drag(event.position)
+		if _scroll_touch != -1:
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if _seen_touch:
+			var bar := _scroll.get_v_scroll_bar()
+			if bar.visible and bar.get_global_rect().has_point(event.position):
+				return
+			get_viewport().set_input_as_handled()
+			return
+		if event.pressed:
+			_scroll_mouse = _begin_scroll_drag(event.position)
+			if _scroll_mouse:
+				get_viewport().set_input_as_handled()
+		elif _scroll_mouse:
+			_end_scroll_drag(event.position)
+			get_viewport().set_input_as_handled()
+	elif event is InputEventMouseMotion and _scroll_mouse:
+		_move_scroll_drag(event.position)
+		get_viewport().set_input_as_handled()
+
+
+func _begin_scroll_drag(pos: Vector2) -> bool:
+	if not _scroll.get_global_rect().has_point(pos):
+		return false
+	var bar := _scroll.get_v_scroll_bar()
+	if bar.visible and bar.get_global_rect().has_point(pos):
+		return false
+	_scroll_start = pos
+	_scroll_origin = _scroll.scroll_vertical
+	_scroll_dragged = false
+	_scroll_button = null
+	for node in _content.find_children("*", "Button", true, false):
+		if node.is_visible_in_tree() and not node.disabled and node.get_global_rect().has_point(pos):
+			_scroll_button = node
+			node.set_pressed_no_signal(true)
+			break
+	return true
+
+
+func _move_scroll_drag(pos: Vector2) -> void:
+	if not _scroll_dragged and pos.distance_to(_scroll_start) >= 10.0:
+		_scroll_dragged = true
+		if is_instance_valid(_scroll_button):
+			_scroll_button.set_pressed_no_signal(false)
+	if _scroll_dragged:
+		_scroll.scroll_vertical = _scroll_origin - int(pos.y - _scroll_start.y)
+
+
+func _end_scroll_drag(pos: Vector2, allow_tap: bool = true) -> void:
+	_move_scroll_drag(pos)
+	var button := _scroll_button
+	var tapped: bool = allow_tap and not _scroll_dragged and is_instance_valid(button) \
+		and button.get_global_rect().has_point(pos)
+	_cancel_scroll_drag()
+	if tapped:
+		button.pressed.emit()
+
+
+func _cancel_scroll_drag() -> void:
+	if is_instance_valid(_scroll_button):
+		_scroll_button.set_pressed_no_signal(false)
+	_scroll_button = null
+	_scroll_touch = -1
+	_scroll_mouse = false
+	_scroll_dragged = false

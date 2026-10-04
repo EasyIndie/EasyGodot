@@ -8,6 +8,12 @@
 #   - animate=false 时全部同步执行（供 headless 测试确定性驱动，不依赖帧推进）。
 extends Node3D
 
+const VisualTheme = preload("res://meta/visual_theme.gd")
+const BeveledBox = preload("res://meta/beveled_box.gd")
+
+var theme_id := "mist"
+var _colors: Dictionary = VisualTheme.palette("mist")
+
 const Loader = preload("res://core/level_loader.gd")
 const Core = preload("res://core/puzzle_core.gd")
 const State = preload("res://core/puzzle_state.gd")
@@ -29,11 +35,11 @@ const FALL_GRAVITY := 30.0     # 重力加速度（世界单位/秒²）
 # ── 配色 ────────────────────────────────────────────────
 # 棋盘两色 + 目标色 + 方块色。数值刻意压得比“纯色块”灰一点、暗一点，
 # 这样顶面提亮/边缘压暗（见下面的着色器）才有空间做出层次。
-const COLOR_TILE_A := Color(0.38, 0.46, 0.66)   # 棋盘格（浅）
-const COLOR_TILE_B := Color(0.31, 0.39, 0.58)   # 棋盘格（深）
-const COLOR_GOAL := Color(0.16, 0.80, 0.52)     # 目标格（会呼吸发光）
-const COLOR_BLOCK := Color(1.00, 0.60, 0.22)    # 方块（暖橙）
-const COLOR_GOAL_RING := Color(0.35, 1.00, 0.70) # 目标“光圈”（嵌在瓦片表面）
+const COLOR_TILE_A := Color("8faec5")   # 棋盘格（浅）
+const COLOR_TILE_B := Color("7595b1")   # 棋盘格（深）
+const COLOR_GOAL := Color("3da889")     # 目标格（会呼吸发光）
+const COLOR_BLOCK := Color("efb853")    # 方块（暖橙）
+const COLOR_GOAL_RING := Color("b4ffe3") # 目标“光圈”（嵌在瓦片表面）
 # ── 机关配色（机关必须一眼可见，否则等于没做）──────────
 const COLOR_SWITCH := Color(1.00, 0.78, 0.30)      # 开关（琥珀）
 const COLOR_SWITCH_ON := Color(1.00, 0.95, 0.55)   # 开关被压住（更亮）
@@ -487,15 +493,15 @@ func _build_board() -> void:
 	# 只清一半（tiles/goal_tiles 清了、机关表没清）比不清更难发现。
 	_mech_tiles.clear()
 	_bridge_ghosts.clear()
-	_tile_mat_a = _make_tile_material(COLOR_TILE_A)
-	_tile_mat_b = _make_tile_material(COLOR_TILE_B)
-	_tile_mat_goal = _make_tile_material(COLOR_GOAL, 0.55)
-	_tile_mat_switch = _make_tile_material(COLOR_SWITCH, 0.12)
-	_tile_mat_bridge_on = _make_tile_material(COLOR_BRIDGE_ON, 0.10)
-	_tile_mat_bridge_off = _make_tile_material(Color(COLOR_BRIDGE_ON.r, COLOR_BRIDGE_ON.g, COLOR_BRIDGE_ON.b, 0.35), 0.0)
-	_tile_mat_portal_a = _make_tile_material(COLOR_PORTAL_A, 0.35)
-	_tile_mat_portal_b = _make_tile_material(COLOR_PORTAL_B, 0.35)
-	_tile_mat_bridge_ghost = _make_tile_material(Color(COLOR_BRIDGE_ON.r, COLOR_BRIDGE_ON.g, COLOR_BRIDGE_ON.b, 0.22), 0.0)
+	_tile_mat_a = _make_tile_material(_colors["tile_a"])
+	_tile_mat_b = _make_tile_material(_colors["tile_b"])
+	_tile_mat_goal = _make_tile_material(_colors["goal"], 0.18)
+	_tile_mat_switch = _make_tile_material(_colors["switch"], 0.12)
+	_tile_mat_bridge_on = _make_tile_material(_colors["bridge"], 0.10)
+	_tile_mat_bridge_off = _make_tile_material(Color(_colors["bridge"].r, _colors["bridge"].g, _colors["bridge"].b, 0.35), 0.0)
+	_tile_mat_portal_a = _make_tile_material(_colors["portal_a"], 0.35)
+	_tile_mat_portal_b = _make_tile_material(_colors["portal_b"], 0.35)
+	_tile_mat_bridge_ghost = _make_tile_material(Color(_colors["bridge"].r, _colors["bridge"].g, _colors["bridge"].b, 0.22), 0.0)
 	board_root = Node3D.new()
 	board_root.name = "Board"
 	add_child(board_root)
@@ -632,8 +638,8 @@ func _make_tile_material(base: Color, glow: float = 0.0) -> ShaderMaterial:
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 uniform vec3 base_color : source_color = vec3(0.38, 0.46, 0.66);
-uniform float top_boost = 0.18;
-uniform float edge_dark = 0.26;
+uniform float top_boost = 0.10;
+uniform float edge_dark = 0.12;
 uniform float glow : hint_range(0.0, 2.0) = 0.0;
 void fragment() {
 	vec3 wn = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
@@ -641,9 +647,9 @@ void fragment() {
 	vec3 c = base_color * mix(1.0 - edge_dark, 1.0 + top_boost, up);
 	vec2 e = min(UV, vec2(1.0) - UV);
 	float rim = smoothstep(0.0, 0.09, min(e.x, e.y));
-	c *= mix(0.82, 1.0, rim);
+	c *= mix(0.95, 1.0, rim);
 	ALBEDO = c;
-	ROUGHNESS = 0.70;
+	ROUGHNESS = 0.46;
 	METALLIC = 0.0;
 	EMISSION = base_color * glow;
 }
@@ -658,9 +664,9 @@ void fragment() {
 func _make_goal_ring(pos: Vector3) -> MeshInstance3D:
 	# 目标标记：嵌在瓦片表面的一圈荧光（比“整格变绿”更清楚，也不会被方块完全盖住）
 	var t := TorusMesh.new()
-	t.inner_radius = 0.26
-	t.outer_radius = 0.38
-	t.rings = 24
+	t.inner_radius = 0.29
+	t.outer_radius = 0.35
+	t.rings = 4
 	t.ring_segments = 6
 	var sh := Shader.new()
 	sh.code = """
@@ -675,7 +681,7 @@ void fragment() {
 """
 	var mat := ShaderMaterial.new()
 	mat.shader = sh
-	mat.set_shader_parameter("ring_color", COLOR_GOAL_RING)
+	mat.set_shader_parameter("ring_color", _colors["ring"])
 	mat.set_shader_parameter("energy", 1.0)
 	var mi := MeshInstance3D.new()
 	mi.name = "GoalRing"
@@ -683,7 +689,7 @@ void fragment() {
 	mi.material_override = mat
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.position = pos
-	mi.rotation_degrees = Vector3(90.0, 0.0, 0.0)   # 平铺在瓦片上
+	mi.rotation_degrees = Vector3.ZERO   # 平铺在瓦片上
 	goal_rings.append(mi)
 	return mi
 
@@ -699,7 +705,7 @@ func _build_block() -> void:
 	_block_pivot = Node3D.new()
 	_block_pivot.name = "BlockPivot"
 	block.add_child(_block_pivot)
-	_block_mat = _make_block_material(COLOR_BLOCK)
+	_block_mat = _make_block_material(_colors["block"])
 
 
 func ghost_visible() -> bool:
@@ -730,7 +736,7 @@ func _build_ghost() -> void:
 
 func _ghost_material() -> StandardMaterial3D:
 	var mat := StandardMaterial3D.new()
-	var c: Color = COLOR_BLOCK
+	var c: Color = _colors["block"]
 	mat.albedo_color = Color(c.r, c.g, c.b, GHOST_ALPHA)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -888,10 +894,10 @@ void fragment() {
 	float up = clamp(wn.y, 0.0, 1.0);
 	vec3 c = base_color * mix(0.88, 1.12, up);
 	float fres = pow(1.0 - clamp(dot(normalize(NORMAL), VIEW), 0.0, 1.0), 2.5);
-	c += vec3(0.34, 0.40, 0.52) * fres * 0.28;
+	c += vec3(0.34, 0.40, 0.52) * fres * 0.12;
 	ALBEDO = c;
-	ROUGHNESS = 0.55;
-	METALLIC = 0.0;
+	ROUGHNESS = 0.36;
+	METALLIC = 0.08;
 	EMISSION = (base_color * 0.8 + vec3(0.5)) * flash;
 }
 """
@@ -918,10 +924,8 @@ func _position_block() -> void:
 
 func _make_box(size: Vector3, mat: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
-	var box := BoxMesh.new()
-	box.size = size
-	box.material = mat
-	mi.mesh = box
+	mi.mesh = BeveledBox.mesh(size, 0.055 if size.y >= 0.9 else 0.025)
+	mi.material_override = mat
 	return mi
 
 
@@ -938,15 +942,15 @@ func _process(delta: float) -> void:
 	_glow_t += delta
 	var pulse: float = 0.5 + 0.42 * sin(_glow_t * 2.0)
 	if _tile_mat_goal != null:
-		_tile_mat_goal.set_shader_parameter("glow", 0.35 + 0.5 * pulse)
+		_tile_mat_goal.set_shader_parameter("glow", 0.12 + 0.14 * pulse)
 	for r in goal_rings:
 		if not is_instance_valid(r):
 			continue
 		var m: ShaderMaterial = r.material_override
 		if m != null:
-			m.set_shader_parameter("energy", 0.85 + 0.9 * pulse)
+			m.set_shader_parameter("energy", 0.85 + 0.25 * pulse)
 		# 缓慢自转 + 轻微起伏：静止画面上的一点“活气”
-		r.rotation.y = _glow_t * 0.6
+		r.rotation.y = 0.0
 		r.position.y = 0.012 + 0.02 * sin(_glow_t * 1.6)
 
 func block_mesh_count() -> int:
@@ -1060,3 +1064,21 @@ func _free_all_children() -> void:
 	for c in get_children():
 		remove_child(c)
 		c.free()
+
+
+func set_visual_theme(id: String) -> void:
+	theme_id = VisualTheme.valid(id)
+	_colors = VisualTheme.palette(theme_id)
+	var bindings := [[_tile_mat_a, "tile_a"], [_tile_mat_b, "tile_b"], [_tile_mat_goal, "goal"],
+		[_tile_mat_switch, "switch"], [_tile_mat_bridge_on, "bridge"], [_tile_mat_bridge_off, "bridge"],
+		[_tile_mat_bridge_ghost, "bridge"], [_tile_mat_portal_a, "portal_a"], [_tile_mat_portal_b, "portal_b"], [_block_mat, "block"]]
+	for entry in bindings:
+		if entry[0] != null:
+			entry[0].set_shader_parameter("base_color", _colors[entry[1]])
+	for ring in goal_rings:
+		ring.material_override.set_shader_parameter("ring_color", _colors["ring"])
+	for root_node in [_ghost, _ghost_rig]:
+		if root_node != null:
+			for child in root_node.get_children():
+				if child is MeshInstance3D:
+					child.material_override = _ghost_material()

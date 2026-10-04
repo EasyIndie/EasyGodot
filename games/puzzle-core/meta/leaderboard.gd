@@ -7,6 +7,8 @@
 # 与具体玩法无关：只依赖 Progress 的 runs()/best_moves() 与关卡元数据 entries。
 extends RefCounted
 
+const I18n = preload("res://meta/i18n.gd")
+
 const Shapes = preload("res://core/shapes.gd")
 
 const MAX_SHOWN := 5
@@ -21,7 +23,7 @@ static func format_time(ms: int) -> String:
 		return "—"
 	var total: float = float(ms) / 1000.0
 	if total < 60.0:
-		return "%.1f 秒" % total
+		return I18n.t("%.1f 秒") % total
 	var m: int = int(total) / 60
 	return "%d:%04.1f" % [m, total - float(m * 60)]
 
@@ -38,7 +40,7 @@ static func format_clock(ms: int) -> String:
 static func best_time_text(progress, key: String) -> String:
 	# 「最快 12.4 秒」；无记录返回 ""
 	var t: int = progress.best_time(key)
-	return "" if t < 0 else "最快 %s" % format_time(t)
+	return "" if t < 0 else I18n.t("最快 %s") % format_time(t)
 
 
 static func runs(progress, key: String) -> Array:
@@ -53,7 +55,7 @@ static func board_text(progress, key: String, limit: int = MAX_SHOWN) -> String:
 	var out: Array = []
 	for i in range(mini(limit, rs.size())):
 		out.append(str(int(rs[i]["moves"])))
-	return " / ".join(out) + " 步"
+	return " / ".join(out) + I18n.t(" 步")
 
 
 static func summary(progress, entries: Array) -> Dictionary:
@@ -102,15 +104,15 @@ static func summary_text(sum: Dictionary) -> String:
 	var replaying: bool = ever > round_cleared
 	var t: String = ""
 	if replaying:
-		t = "本轮 %d / %d　·　曾经通关 %d" % [round_cleared, total, ever]
+		t = I18n.t("本轮 %d / %d　·　曾经通关 %d") % [round_cleared, total, ever]
 	else:
-		t = "已通关 %d / %d" % [round_cleared, total]
+		t = I18n.t("已通关 %d / %d") % [round_cleared, total]
 	if int(sum["completed"]) > 0:
-		var best_label: String = "本机最好成绩" if replaying else "总成绩"
-		t += "　·　%s %d 步　·　已最优 %d 关" % [best_label, int(sum["total_best"]), int(sum["optimized"])]
+		var best_label: String = I18n.t("本机最好成绩") if replaying else I18n.t("总成绩")
+		t += I18n.t("　·　%s %d 步　·　已最优 %d 关") % [best_label, int(sum["total_best"]), int(sum["optimized"])]
 		# 只有真的计过时才显示（旧存档没有时间记录，否则会冒出一个「—」）
 		if int(sum.get("timed", 0)) > 0:
-			t += "　·　合计最快 %s" % format_time(int(sum["total_time"]))
+			t += I18n.t("　·　合计最快 %s") % format_time(int(sum["total_time"]))
 	return t
 
 
@@ -119,13 +121,13 @@ static func detail_text(entries: Array, progress, index: int) -> String:
 	if index < 0 or index >= entries.size():
 		return ""
 	var e: Dictionary = entries[index]
-	var parts: Array = ["第 %02d 关" % (index + 1)]
+	var parts: Array = [I18n.t("第 %02d 关") % (index + 1)]
 	parts.append(Shapes.display_name(str(e.get("shape", "domino"))))
 	var optimal: int = int(e.get("optimal", -1))
 	if optimal > 0:
-		parts.append("参考 %d 步" % optimal)
+		parts.append(I18n.t("参考 %d 步") % optimal)
 	var bt: String = board_text(progress, str(e["key"]))
-	parts.append("本机榜：" + (bt if bt != "" else "暂无成绩"))
+	parts.append(I18n.t("本机榜：") + (bt if bt != "" else I18n.t("暂无成绩")))
 	var tt: String = best_time_text(progress, str(e["key"]))
 	if tt != "":
 		parts.append(tt)

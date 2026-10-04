@@ -19,6 +19,9 @@
 #   - completed / best_moves 用于顺序解锁与进度展示
 extends RefCounted
 
+const VisualTheme = preload("res://meta/visual_theme.gd")
+const I18n = preload("res://meta/i18n.gd")
+
 const DEFAULT_PATH := "user://progress.json"
 const FORMAT := 1
 const MAX_RUNS := 5   # 每关保留的本机榜条数
@@ -34,6 +37,8 @@ var _ghost: bool = false          # 偏好：是否显示「上次的走法」�
 # 偏好：是否在屏幕上显示方向键。默认**关** —— 手势是主要输入，
 # 少一块按钮，棋盘就多一块（真机反馈：屏幕上的按钮太多太抢）。
 var _pad: bool = false
+var _theme := "mist"
+var _language := "system"
 var _current_level: String = ""  # 普通模式最近玩的关卡；好友挑战不覆盖它
 
 
@@ -85,6 +90,8 @@ func _read() -> void:
 			}
 	_ghost = bool(d.get("ghost", false))
 	_pad = bool(d.get("pad", false))
+	_theme = VisualTheme.valid(str(d.get("theme", "mist")))
+	_language = I18n.valid_preference(str(d.get("language", "system")))
 	_current_level = str(d.get("current_level", ""))
 	for k in _map(d, "runs"):
 		var arr = d["runs"][k]
@@ -141,6 +148,8 @@ func save() -> bool:
 		"runs": _runs,
 		"ghost": _ghost,
 		"pad": _pad,
+		"theme": _theme,
+		"language": _language,
 		"current_level": _current_level,
 	}, "\t"))
 	f.flush()
@@ -315,4 +324,19 @@ func reset() -> void:
 	_ghost = false
 	_pad = false
 	_current_level = ""
+	save()
+
+
+func visual_theme() -> String:
+	return _theme
+
+func set_visual_theme(id: String) -> void:
+	_theme = VisualTheme.valid(id)
+	save()
+
+func language_preference() -> String:
+	return _language
+
+func set_language_preference(value: String) -> void:
+	_language = I18n.valid_preference(value)
 	save()

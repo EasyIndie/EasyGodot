@@ -8,6 +8,8 @@
 #   纯函数化是为了能测：这里的每条规则都有断言，而不是“上线看看会不会卡”。
 extends RefCounted
 
+const I18n = preload("res://meta/i18n.gd")
+
 # 档位：0 = 最低（关阴影/关 MSAA），3 = 最高（4x MSAA + 阴影 + 高光效果）
 const TIERS: int = 4
 # 帧时间阈值（毫秒）：超过 HIGH_MS 降档，低于 LOW_MS 且稳定才升档
@@ -74,10 +76,10 @@ static func tier_label(tier: int) -> String:
 	# 给诊断/日志用的可读名字
 	match clampi(tier, 0, TIERS - 1):
 		0:
-			return "省电"
+			return I18n.t("省电")
 		1:
-			return "流畅"
+			return I18n.t("流畅")
 		2:
-			return "标准"
+			return I18n.t("标准")
 		_:
-			return "精细"
+			return I18n.t("精细")

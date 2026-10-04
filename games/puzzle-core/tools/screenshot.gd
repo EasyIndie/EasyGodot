@@ -15,6 +15,7 @@ func _run() -> void:
 	var save_path := "user://screenshot_progress.json"
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(save_path))
 	ProjectSettings.set_setting("puzzle/progress_path", save_path)
+	ProjectSettings.set_setting("puzzle/system_locale_override", "en" if args.has("--en") else "zh")
 
 	var scene = load("res://scenes/main.tscn").instantiate()
 	root.add_child(scene)
@@ -30,7 +31,15 @@ func _run() -> void:
 		scene._load_level(idx, false)
 	else:
 		scene.game.load_level(level)
+	for arg in args:
+		if str(arg).begins_with("--theme="):
+			scene._apply_visual_theme(str(arg).trim_prefix("--theme="))
 	scene._frame_camera()
+	if args.has("--win"):
+		scene.game.won_flag = true
+		scene.win_label.text = scene._win_text({"move_count": 3, "time_ms": 12800, "first_clear": true, "improved": false})
+		scene.win_label.visible = true
+		scene._refresh_bands()
 	if args.has("--menu"):
 		scene._open_level_select()
 	for _i in range(12):

@@ -46,7 +46,7 @@ static func get_shape(id: String):
 
 
 static func display_name(id: String) -> String:
-	return str(DISPLAY_NAMES.get(id, id))
+	return preload("res://meta/i18n.gd").t(str(DISPLAY_NAMES.get(id, id)))
 
 
 static func orientation_names(id: String) -> Array:

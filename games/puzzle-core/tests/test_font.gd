@@ -87,14 +87,14 @@ func _test_glyph_coverage() -> void:
 	# 其字符串里的符号（如 ∘、✓）也未必在 Noto Sans SC 里，强行要求会误报。
 	# core/ **必须**包含：它不画界面，但会提供显示用文案（如 shapes.gd 的形状名）。
 	# 真实踩过：把形状名从 meta/ 搬进 core/ 后扫描范围没跟上 → 卡片上变豆腐块。
-	for d in ["res://scenes", "res://meta", "res://core"]:
+	for d in ["res://scenes", "res://meta", "res://core", "res://i18n"]:
 		var dir := DirAccess.open(d)
 		if dir == null:
 			continue
 		dir.list_dir_begin()
 		var name := dir.get_next()
 		while name != "":
-			if name.ends_with(".gd") or name.ends_with(".tscn"):
+			if name.ends_with(".gd") or name.ends_with(".tscn") or name.ends_with(".json"):
 				_collect_strings(_read(d + "/" + name), chars)
 			name = dir.get_next()
 		dir.list_dir_end()

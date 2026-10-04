@@ -86,7 +86,7 @@ STRING_RE = re.compile(r'"[^"\n]*"|\'[^\'\n]*\'')
 # core/ 必须包含：它虽然不画界面，但会提供**显示用文案**（如 shapes.gd 的形状名
 # 「骨牌」）。真实踩过：把形状名从 meta/ 搬进 core/ 之后，扫描范围没跟着变，
 # 这两个字形被移出子集，卡片上直接变成豆腐块。
-UI_SOURCES = ["scenes/*.gd", "meta/*.gd", "core/*.gd", "*.tscn", "*.godot"]
+UI_SOURCES = ["scenes/*.gd", "meta/*.gd", "core/*.gd", "*.tscn", "*.godot", "i18n/*.json"]
 
 chars = set(chr(c) for c in range(0x20, 0x7F))     # ASCII 可见字符打底
 base = os.path.join(root, project)
