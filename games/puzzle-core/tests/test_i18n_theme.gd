@@ -74,13 +74,17 @@ func _run() -> void:
 	scene._open_level_select()
 	await process_frame
 	check(scene.level_select._title.text == "Choose a level", "英文选关")
+	scene._open_game_menu(true)
+	await process_frame
 	scene.level_select._theme_choices["abyss"].pressed.emit()
 	await process_frame
-	check(not scene.level_select.is_open() and scene.progress.visual_theme() == "abyss", "主题卡片直接选择并返回游戏")
+	check(scene.level_select.is_open() and scene.level_select._settings_open and scene.progress.visual_theme() == "abyss",
+		"偏好页切换主题后继续留在偏好页，方便对比主题")
 	check(scene.game.state.world_cells() == state, "主题卡片切换保留棋盘状态")
+	scene.level_select.close()
 	scene._open_level_select()
 	await process_frame
-	check(scene.touch_controls._action_buttons[0].text == "Retry", "英文触屏按钮")
+	check(scene.touch_controls._action_buttons[0].tooltip_text == "Retry", "英文触屏图标按钮辅助提示")
 	# en -> zh -> system。跟随英文系统，继续保持当前谜题。
 	scene._on_language_requested()
 	await process_frame

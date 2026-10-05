@@ -57,7 +57,8 @@ func _run() -> void:
 			await process_frame
 			var controls = scene.touch_controls
 			check(not controls._hint.get_global_rect().intersects(controls._actions.get_global_rect()), "手势提示不能与按钮重叠：%s" % str(viewport))
-	root.size = Vector2i(360, 800)
+	# Use a short phone viewport so the 20-card page actually overflows and exercises drag scrolling.
+	root.size = Vector2i(360, 457)
 	await process_frame
 	scene.progress.record_win("level_01", ["backward", "backward"])
 	scene._open_level_select()

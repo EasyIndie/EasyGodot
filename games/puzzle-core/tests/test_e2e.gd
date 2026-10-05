@@ -356,6 +356,8 @@ func _test_hud_minimal() -> void:
 	check(names.size() == 3, "触屏层应只有 3 个界面元素，实际 %s" % str(names))
 	check(not tc.pad_visible(), "方向键默认不显示（手势是主要输入）")
 	# 7) 方向键开关：开了就出现，关了就没
+	# Headless 测试运行在桌面模式，显式切到触屏布局再验证触屏专属控件。
+	tc.set_touch_mode(true)
 	tc.set_pad_enabled(true)
 	check(tc.pad_visible(), "开启方向键后应显示")
 	tc.set_pad_enabled(false)
@@ -1253,6 +1255,7 @@ func _test_swipe_hint() -> void:
 	root.add_child(scene)
 	await process_frame
 	scene.touch_controls.set_shown(true)
+	scene.touch_controls.set_touch_mode(true)
 	scene.touch_controls.show_swipe_hint()
 	check(scene.touch_controls.hint_visible(), "首次进关卡应显示滑动手势提示")
 	check(scene.touch_controls.hint_text().contains("↖"), "提示里应画出对角线方向")
