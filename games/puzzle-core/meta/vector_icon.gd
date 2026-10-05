@@ -23,9 +23,17 @@ func _draw() -> void:
 		"stop":
 			draw_rect(Rect2(c - Vector2(u * 0.48, u * 0.48), Vector2(u * 0.96, u * 0.96)), tint, true)
 		"replay":
-			draw_arc(c, u * 0.68, deg_to_rad(32), deg_to_rad(324), 28, tint, w, true)
-			draw_colored_polygon(PackedVector2Array([c + Vector2(-u * 0.72, -u * 0.12), c + Vector2(-u * 0.15, -u * 0.24), c + Vector2(-u * 0.42, -u * 0.68)]), tint)
-			draw_colored_polygon(PackedVector2Array([c + Vector2(-u * 0.08, -u * 0.36), c + Vector2(-u * 0.08, u * 0.38), c + Vector2(u * 0.52, 0)]), tint)
+			# A compact video-camera mark identifies the saved recording/replay action.
+			var replay_u := u * 1.28
+			var replay_w := maxf(replay_u * 0.12, 1.6)
+			var body := Rect2(c + Vector2(-replay_u * 0.72, -replay_u * 0.46), Vector2(replay_u * 0.96, replay_u * 0.92))
+			draw_rect(body, tint, false, replay_w)
+			var lens_top := c + Vector2(replay_u * 0.24, -replay_u * 0.25)
+			var lens_outer_top := c + Vector2(replay_u * 0.82, -replay_u * 0.56)
+			var lens_outer_bottom := c + Vector2(replay_u * 0.82, replay_u * 0.56)
+			var lens_bottom := c + Vector2(replay_u * 0.24, replay_u * 0.25)
+			draw_polyline(PackedVector2Array([lens_top, lens_outer_top, lens_outer_bottom, lens_bottom]), tint, replay_w, true)
+			draw_circle(c + Vector2(-replay_u * 0.25, 0), replay_u * 0.19, tint, false, replay_w, true)
 		"share":
 			var a := c + Vector2(-u * 0.58, 0)
 			var b := c + Vector2(u * 0.48, -u * 0.55)
