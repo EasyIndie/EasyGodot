@@ -81,6 +81,7 @@ func _test_adaptation() -> void:
 
 	# 持续卡顿 → 降档（直到最低）
 	var t: int = RQ.TIERS - 1
+	check(RQ.next_tier(t, 22.1, 2.0) == RQ.TIERS - 2, "持续低于约 45fps 应及时降一档")
 	t = RQ.next_tier(t, 60.0, 2.0)
 	check(t == RQ.TIERS - 2, "卡顿应降一档，got=%d" % t)
 	t = RQ.next_tier(t, 60.0, 2.0)

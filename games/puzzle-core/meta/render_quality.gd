@@ -13,7 +13,7 @@ const I18n = preload("res://meta/i18n.gd")
 # 档位：0 = 最低（关阴影/关 MSAA），3 = 最高（4x MSAA + 阴影 + 高光效果）
 const TIERS: int = 4
 # 帧时间阈值（毫秒）：超过 HIGH_MS 降档，低于 LOW_MS 且稳定才升档
-const SLOW_MS: float = 30.0
+const SLOW_MS: float = 22.0
 const FAST_MS: float = 15.0
 # 升降档前的观察时长（秒）：太短会被偶发卡顿带着乱跳
 const SAMPLE_SEC: float = 1.5

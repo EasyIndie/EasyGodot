@@ -21,6 +21,17 @@ const Mech = preload("res://core/mechanisms.gd")
 const MechState = preload("res://core/mech_state.gd")
 const Moves = preload("res://core/moves.gd")
 
+# Shader source is constant across levels; reuse compiled Shader resources while
+# creating fresh materials for each theme/level's uniform values.
+static var _shader_cache: Dictionary = {}
+
+static func _cached_shader(key: String, source: String) -> Shader:
+	if not _shader_cache.has(key):
+		var shader := Shader.new()
+		shader.code = source
+		_shader_cache[key] = shader
+	return _shader_cache[key]
+
 signal won
 signal moved
 signal fell
@@ -633,8 +644,7 @@ func _make_tile_material(base: Color, glow: float = 0.0) -> ShaderMaterial:
 	#   1) 顶面提亮、侧面压暗（用世界法线的 y 分量判断“是不是顶面”）
 	#   2) 靠近面边缘轻微压暗 —— 用 UV 到边界的距离模拟倒角，比加几何体便宜得多
 	#   3) glow 给目标格做呼吸发光
-	var sh := Shader.new()
-	sh.code = """
+	var sh := _cached_shader("tile", """
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 uniform vec3 base_color : source_color = vec3(0.38, 0.46, 0.66);
@@ -655,7 +665,7 @@ void fragment() {
 	METALLIC = surface_metallic;
 	EMISSION = base_color * glow;
 }
-"""
+""")
 	var mat := ShaderMaterial.new()
 	mat.shader = sh
 	mat.set_shader_parameter("base_color", base)
@@ -672,8 +682,7 @@ func _make_goal_ring(pos: Vector3) -> MeshInstance3D:
 	t.outer_radius = 0.35
 	t.rings = 4
 	t.ring_segments = 6
-	var sh := Shader.new()
-	sh.code = """
+	var sh := _cached_shader("goal_ring", """
 shader_type spatial;
 render_mode unshaded, cull_disabled;
 uniform vec3 ring_color : source_color = vec3(0.35, 1.0, 0.70);
@@ -682,7 +691,7 @@ void fragment() {
 	ALBEDO = ring_color * energy;
 	EMISSION = vec3(0.0);
 }
-"""
+""")
 	var mat := ShaderMaterial.new()
 	mat.shader = sh
 	mat.set_shader_parameter("ring_color", _colors["ring"])
@@ -887,8 +896,7 @@ func _block_meshes() -> Array:
 func _make_block_material(base: Color) -> ShaderMaterial:
 	# 方块着色器：顶面更亮 + 菲涅尔微亮边缘（让轮廓从背景里“跳”出来）
 	# + flash 通道（通关时闪一下，取代早期“把方块变绿/抬高”的糟糕做法）
-	var sh := Shader.new()
-	sh.code = """
+	var sh := _cached_shader("block", """
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 uniform vec3 base_color : source_color = vec3(1.0, 0.6, 0.22);
@@ -906,7 +914,7 @@ void fragment() {
 	METALLIC = surface_metallic;
 	EMISSION = (base_color * 0.8 + vec3(0.5)) * flash;
 }
-"""
+""")
 	var mat := ShaderMaterial.new()
 	mat.shader = sh
 	mat.set_shader_parameter("base_color", base)
