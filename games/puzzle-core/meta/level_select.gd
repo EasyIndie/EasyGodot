@@ -28,6 +28,7 @@ signal share_requested(index: int)
 signal celebration_requested   # 「回顾通关」：全部通关后想再看一次庆祝动画
 
 const COLS := 5
+const PAGE_SIZE := 20
 const CARD := Vector2(112.0, 86.0)
 const CARD_BG := Color(0.10, 0.13, 0.20, 0.92)
 const CARD_BG_LOCKED := Color(0.08, 0.09, 0.13, 0.75)
@@ -60,6 +61,15 @@ var _theme_choices: Dictionary = {}
 var _language_btn: Button
 var _pad_btn: Button
 var _share_btn: Button
+var _share_feedback_text := ""
+var _settings_open := false
+var _level_page: VBoxContainer
+var _settings_page: VBoxContainer
+var _settings_back_btn: Button
+var _page_prev: Button
+var _page_next: Button
+var _page_label: Label
+var _page_index := 0
 var _ghost_on: bool = false
 var _pad_on: bool = false
 var _back_btn: Button
@@ -118,6 +128,13 @@ func _ready() -> void:
 	box.add_theme_constant_override("separation", 10)
 	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	center.add_child(box)
+	_level_page = VBoxContainer.new()
+	_level_page.add_theme_constant_override("separation", 10)
+	box.add_child(_level_page)
+	_settings_page = VBoxContainer.new()
+	_settings_page.add_theme_constant_override("separation", 10)
+	_settings_page.visible = false
+	box.add_child(_settings_page)
 
 	var title := Label.new()
 	title.text = I18n.t("选择关卡")
@@ -199,6 +216,24 @@ func _ready() -> void:
 	_back_btn.add_theme_stylebox_override("pressed", _sb(CARD_BG_HOVER, EDGE_HI, 2))
 	_back_btn.pressed.connect(func() -> void: close())
 	row.add_child(_back_btn)
+	var page_row := HBoxContainer.new()
+	page_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	page_row.add_theme_constant_override("separation", 10)
+	box.add_child(page_row)
+	_page_prev = Button.new()
+	_page_prev.text = I18n.t("上一页")
+	_page_prev.custom_minimum_size.y = 44.0
+	_page_prev.pressed.connect(func() -> void: _change_page(-1))
+	page_row.add_child(_page_prev)
+	_page_label = Label.new()
+	_page_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_page_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	page_row.add_child(_page_label)
+	_page_next = Button.new()
+	_page_next.text = I18n.t("下一页")
+	_page_next.custom_minimum_size.y = 44.0
+	_page_next.pressed.connect(func() -> void: _change_page(1))
+	page_row.add_child(_page_next)
 
 	# 「回顾通关」：只在全部通关后出现。庆祝动画不该是一次性的，
 	# 但也不该强行弹给玩家（那会变成“每次通关都被恭喜”）。
@@ -211,49 +246,43 @@ func _ready() -> void:
 	_celebrate_btn.add_theme_stylebox_override("normal", _sb(CARD_BG, EDGE, 1))
 	_celebrate_btn.add_theme_stylebox_override("hover", _sb(CARD_BG_HOVER, EDGE_HI, 1))
 	_celebrate_btn.pressed.connect(func() -> void: celebration_requested.emit())
-	row.add_child(_celebrate_btn)
 
-	_share_btn = Button.new()
-	_share_btn.text = I18n.t("分享本关")
-	_share_btn.flat = true
-	_share_btn.focus_mode = Control.FOCUS_NONE
-	_share_btn.add_theme_font_size_override("font_size", 14)
-	_share_btn.add_theme_color_override("font_color", FG_DIM)
-	_share_btn.add_theme_color_override("font_hover_color", Color(0.72, 1.0, 0.86))
-	_share_btn.pressed.connect(func() -> void: share_requested.emit(_current))
-	row.add_child(_share_btn)
+	_share_btn = null
+	_share_feedback_text = I18n.t("分享本关")
 
 	_ghost_btn = Button.new()
 	_ghost_btn.text = I18n.t("影子: 关")
 	_ghost_btn.flat = true
 	_ghost_btn.focus_mode = Control.FOCUS_NONE
 	_ghost_btn.add_theme_font_size_override("font_size", 14)
-	_ghost_btn.add_theme_color_override("font_color", FG_DIM)
-	_ghost_btn.add_theme_color_override("font_hover_color", Color(0.72, 0.90, 1.0))
+	_ghost_btn.add_theme_color_override("font_color", FG)
+	_ghost_btn.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+	_ghost_btn.add_theme_stylebox_override("normal", _sb(CARD_BG, EDGE, 1))
+	_ghost_btn.add_theme_stylebox_override("hover", _sb(CARD_BG_HOVER, EDGE_HI, 1))
 	_ghost_btn.pressed.connect(_on_ghost_pressed)
-	row.add_child(_ghost_btn)
 
-	# 方向键开关：手势是主要输入，方向键是"备选操作方式"。
-	# 放在选关界面而不是游戏画面里 —— 游戏画面上的每一样东西都必须是常用的。
+	# 方向键开关：手势是主要输入，方向键是"备选操作方式"，因此收纳在偏好设置页。
 	_pad_btn = Button.new()
 	_pad_btn.text = I18n.t("方向键: 关")
 	_pad_btn.flat = true
 	_pad_btn.focus_mode = Control.FOCUS_NONE
 	_pad_btn.add_theme_font_size_override("font_size", 14)
-	_pad_btn.add_theme_color_override("font_color", FG_DIM)
-	_pad_btn.add_theme_color_override("font_hover_color", Color(0.72, 0.90, 1.0))
+	_pad_btn.add_theme_color_override("font_color", FG)
+	_pad_btn.add_theme_color_override("font_hover_color", Color(1, 1, 1))
+	_pad_btn.add_theme_stylebox_override("normal", _sb(CARD_BG, EDGE, 1))
+	_pad_btn.add_theme_stylebox_override("hover", _sb(CARD_BG_HOVER, EDGE_HI, 1))
 	_pad_btn.pressed.connect(_on_pad_pressed)
-	row.add_child(_pad_btn)
 
 	_reset_btn = Button.new()
 	_reset_btn.text = I18n.t("重置进度")
 	_reset_btn.flat = true
 	_reset_btn.focus_mode = Control.FOCUS_NONE
 	_reset_btn.add_theme_font_size_override("font_size", 14)
-	_reset_btn.add_theme_color_override("font_color", FG_DIM)
-	_reset_btn.add_theme_color_override("font_hover_color", Color(1.0, 0.55, 0.55))
+	_reset_btn.add_theme_color_override("font_color", FG)
+	_reset_btn.add_theme_color_override("font_hover_color", Color(1.0, 0.72, 0.72))
+	_reset_btn.add_theme_stylebox_override("normal", _sb(CARD_BG, EDGE, 1))
+	_reset_btn.add_theme_stylebox_override("hover", _sb(CARD_BG_HOVER, Color(1.0, 0.55, 0.55, 0.75), 1))
 	_reset_btn.pressed.connect(_on_reset_pressed)
-	row.add_child(_reset_btn)
 
 	_language_btn = Button.new()
 	_language_btn.custom_minimum_size.y = 44.0
@@ -277,17 +306,42 @@ func _ready() -> void:
 		if action == "policy":
 			OS.shell_open("https://easyindie.github.io/EasyGodot/privacy.html"))
 	add_child(_privacy)
-
+	var settings_title := Label.new()
+	settings_title.text = I18n.t("游戏偏好设置")
+	settings_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	settings_title.add_theme_font_size_override("font_size", 26)
+	settings_title.add_theme_color_override("font_color", FG)
+	_settings_page.add_child(settings_title)
+	_settings_back_btn = Button.new()
+	_settings_back_btn.text = I18n.t("返回游戏")
+	_settings_back_btn.custom_minimum_size.y = 48.0
+	_settings_back_btn.pressed.connect(close)
+	_settings_page.add_child(_settings_back_btn)
+	# 页面内容按职责分组：选关保留标题/进度/卡片；偏好集中在独立页面。
+	for node in [title, _subtitle, page_row, _grid, _detail, _hint, row]:
+		box.remove_child(node)
+		_level_page.add_child(node)
+	for node in [_theme_btn, theme_grid, _language_btn, privacy_btn, _ghost_btn, _pad_btn, _reset_btn, _celebrate_btn]:
+		var old_parent: Node = node.get_parent()
+		if old_parent != null:
+			old_parent.remove_child(node)
+		_settings_page.add_child(node)
+	_settings_page.move_child(settings_title, 0)
+	_settings_page.move_child(_settings_back_btn, 1)
 	get_viewport().size_changed.connect(_apply_layout)
 
 
 # ── 对外 ───────────────────────────────────────────────
 
-func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
+func open_with(entries: Array, p_progress, p_current: int = 0, p_preferences: bool = false) -> void:
 	_theme_btn.text = I18n.t("主题：%s") % preload("res://meta/visual_theme.gd").title(p_progress.visual_theme())
 	_language_btn.text = I18n.t("语言：%s") % I18n.preference_title(p_progress.language_preference())
 	_progress = p_progress
 	_current = clampi(p_current, 0, maxi(entries.size() - 1, 0))
+	_page_index = int(floor(float(_current) / float(PAGE_SIZE)))
+	_settings_open = p_preferences
+	_level_page.visible = not p_preferences
+	_settings_page.visible = p_preferences
 	_keys.clear()
 	for e in entries:
 		_keys.append(str(e["key"]))
@@ -313,6 +367,7 @@ func open_with(entries: Array, p_progress, p_current: int = 0) -> void:
 	# 汇总文案的「本轮 / 曾经」口径统一在 Leaderboard.summary_text 里处理（只留一处真相）
 	_subtitle.text = Leaderboard.summary_text(Leaderboard.summary(_progress, entries))
 	_apply_layout()
+	_refresh_page()
 	_show_detail(_current)
 	_set_confirm(false)
 	visible = true
@@ -335,6 +390,32 @@ func close() -> void:
 
 func is_open() -> bool:
 	return visible
+
+
+func _change_page(delta: int) -> void:
+	var page_count: int = maxi(ceili(float(_cards.size()) / float(PAGE_SIZE)), 1)
+	_page_index = clampi(_page_index + delta, 0, page_count - 1)
+	_refresh_page()
+	_scroll.set_deferred("scroll_vertical", 0)
+	var first: int = _page_index * PAGE_SIZE
+	for i in range(first, mini(first + PAGE_SIZE, _cards.size())):
+		if not _cards[i].disabled:
+			_cards[i].grab_focus()
+			break
+
+
+func _refresh_page() -> void:
+	var page_count: int = maxi(ceili(float(_cards.size()) / float(PAGE_SIZE)), 1)
+	for i in range(_cards.size()):
+		_cards[i].visible = int(i / PAGE_SIZE) == _page_index
+	_page_prev.visible = page_count > 1
+	_page_next.visible = page_count > 1
+	_page_label.visible = page_count > 1
+	_page_prev.disabled = _page_index <= 0
+	_page_next.disabled = _page_index >= page_count - 1
+	var first_level: int = _page_index * PAGE_SIZE + 1
+	var last_level: int = mini(first_level + PAGE_SIZE - 1, _cards.size())
+	_page_label.text = I18n.t("关卡 %d–%d · 第 %d / %d 页") % [first_level, last_level, _page_index + 1, page_count]
 
 
 # 测试用只读接口（不暴露内部结构）
@@ -471,10 +552,14 @@ func _apply_layout() -> void:
 		_hint.text = I18n.t("← → ↑ ↓ 选择     Enter / 点击 开始     Esc 返回")
 	# 按钮：触屏要够大好点（高度按视口自适应，并留出最小可点面积）
 	var btn_h: float = clampf(vp.y * 0.055, 44.0 if touch_mode else 34.0, 52.0)
-	for button in [_share_btn, _ghost_btn, _pad_btn]:
-		button.custom_minimum_size.y = btn_h
+	for button in [_ghost_btn, _pad_btn, _language_btn, _theme_btn, _reset_btn, _page_prev, _page_next, _settings_back_btn]:
+		if button != null:
+			button.custom_minimum_size.y = btn_h
 	_back_btn.custom_minimum_size = Vector2(btn_h * 3.4, btn_h)
 	_back_btn.add_theme_font_size_override("font_size", int(btn_h * 0.42))
+	_settings_back_btn.add_theme_font_size_override("font_size", int(btn_h * 0.38))
+	_page_prev.add_theme_font_size_override("font_size", int(btn_h * 0.34))
+	_page_next.add_theme_font_size_override("font_size", int(btn_h * 0.34))
 	_celebrate_btn.custom_minimum_size = Vector2(btn_h * 2.9, btn_h)
 	_celebrate_btn.add_theme_font_size_override("font_size", int(btn_h * 0.38))
 	_reset_btn.custom_minimum_size = Vector2(btn_h * 2.6, btn_h)
@@ -534,11 +619,12 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func share_button_text() -> String:
-	return _share_btn.text if _share_btn != null else ""
+	return _share_btn.text if _share_btn != null else _share_feedback_text
 
 
 func set_share_button_text(t: String) -> void:
 	# 复制成功后按钮自己说一声（否则玩家不知道点没点成功）
+	_share_feedback_text = t
 	if _share_btn != null:
 		_share_btn.text = t
 
@@ -556,6 +642,7 @@ func set_ghost_state(on: bool) -> void:
 	_ghost_on = on
 	if _ghost_btn != null:
 		_ghost_btn.text = ghost_button_text()
+		_ghost_btn.add_theme_color_override("font_color", FG_DONE if on else FG)
 
 
 func pad_button_text() -> String:
@@ -567,6 +654,7 @@ func set_pad_state(on: bool) -> void:
 	_pad_on = on
 	if _pad_btn != null:
 		_pad_btn.text = pad_button_text()
+		_pad_btn.add_theme_color_override("font_color", FG_DONE if on else FG)
 
 
 func _on_pad_pressed() -> void:

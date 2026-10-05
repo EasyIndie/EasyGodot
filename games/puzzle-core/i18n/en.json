@@ -23,7 +23,7 @@
   "再点一次确认重置!": "Tap again to confirm reset!",
   "再玩一遍": "Play again",
   "回到选关": "Choose a level",
-  "分享本关": "Share level",
+  "分享本关": "Share this level",
   "卡住了": "Keep trying",
   "参考 %d": "Target %d",
   "参考 %d 步": "Target %d moves",
@@ -122,8 +122,14 @@
   "终章挑战": "Final Challenge",
   "再玩一遍会重新开始一轮：通关进度重新计\n本机记录与已解锁关卡保留": "Start a new round with fresh completion progress.\nYour records and unlocked levels are kept.",
   "本机保存进度、成绩、回放和偏好；游戏不上传记录。\n\n无账号、广告或追踪 SDK。\n\n可重置进度删除记录。分享由你主动发送。\n\n完整政策、Web 访问日志说明与支持见在线页面。": "Progress, scores, replays and preferences are saved on this device. The game does not upload them.\n\nNo accounts, ads or tracking SDKs.\n\nReset progress to delete records. Sharing is initiated by you.\n\nSee the online page for the full policy, Web access logs and support.",
-  "青玉庭院": "Jade Garden",
-  "暖陶工坊": "Clay Atelier",
-  "暮紫幻境": "Twilight Dream",
-  "深海流光": "Ocean Glow"
+  "玉林晨雾": "Jade Grove at Dawn",
+  "陶土暖阳": "Sunlit Terracotta",
+  "暮色天鹅绒": "Velvet Dusk",
+  "蔚蓝深海": "Abyssal Blue",
+  "上一页": "Previous",
+  "下一页": "Next",
+  "游戏偏好设置": "Game preferences",
+  "偏好设置": "Settings",
+  "设置": "Settings",
+  "关卡 %d–%d · 第 %d / %d 页": "Levels %d–%d · Page %d / %d"
 }

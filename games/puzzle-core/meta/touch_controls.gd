@@ -1,7 +1,7 @@
 # touch_controls.gd — 触屏操作层：方向键（D-pad）+ 动作按钮 + 滑动手势 + 手势提示。
 #
-# 只在触屏设备显示（`main.gd` 用 DisplayServer.is_touchscreen_available() 判定，
-# 也可用 `?touch=1` / `?touch=0` 强制，桌面调试可按 T 切换）。
+# 操作图标在桌面和触屏都显示；手势提示与可选方向键只在触屏模式出现。
+# `?touch=1` / `?touch=0` 可强制模式，桌面调试可按 T 切换。
 #
 # 设计原则（几条都是踩过坑之后定下来的）：
 #
@@ -46,11 +46,14 @@ signal direction(d: Vector3i)
 signal restart_pressed
 signal select_pressed
 signal replay_pressed
+signal share_pressed
+signal settings_pressed
 
 const LAYOUT = preload("res://meta/ui_layout.gd")
 
 const Gesture = preload("res://meta/gesture.gd")
 const GestureTracker = preload("res://meta/gesture_tracker.gd")
+const VectorIcon = preload("res://meta/vector_icon.gd")
 
 const TAP_SLOP := 12.0         # 小于此位移算"点按"（事件留给按钮），超过才算拖动
 const FLASH_TIME := 0.16       # 方向键命中反馈的闪烁时长
@@ -66,11 +69,8 @@ const GLYPH := {
 	Vector3i(-1, 0, 0): "↖",
 }
 
-# 动作按钮：**纯文字**。
-# 为什么不用图标字形：内置的 Noto Sans SC 子集几乎没有符号字形
-# （↺ ☰ ▶ 全都缺），一旦缺字形就会渲染成豆腐块——字体守卫测试会直接拦下来。
-# 与其为了图标再挂一套符号字体，不如把字写清楚；回放中的状态用**颜色**表达
-# （见 set_replay_playing），这比换一个模糊的小图标更好认。
+# 操作图标由 vector_icon.gd 直接绘制几何线条，缩放时保持锐利；文字留在 tooltip 中，
+# 让窄屏按钮尺寸不受中英文标签长度影响。
 const ACTION_RESTART := "重开"
 const ACTION_SELECT := "选关"
 const ACTION_REPLAY := "回放"
@@ -86,6 +86,9 @@ var _hint: PanelContainer
 var _hint_label: Label
 var _dir_buttons: Array = []
 var _action_buttons: Array = []
+var _action_icons: Array = []
+var _touch_mode := true
+var _icon_names := ["restart", "levels", "share", "settings", "replay"]
 var _theme_colors: Dictionary = {}
 var _replay_button: Button = null
 var _unit: float = 64.0
@@ -144,27 +147,34 @@ func _ready() -> void:
 			_dir_buttons.append(b)
 			_btn_dirs.append(d)
 
-	# 动作按钮：**一排小胶囊**，只放当前真正用得上的那几个。
+	# 动作按钮：**一排统一尺寸的方形图标**，只放当前真正用得上的那几个。
 	# 竖排三大块会占掉右下角一整片（在竖屏手机上横扫棋盘）；一行只占一条边。
 	_actions = HBoxContainer.new()
-	_actions.add_theme_constant_override("separation", 8)
+	_actions.add_theme_constant_override("separation", 7)
 	_actions.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(_actions)
 	var specs: Array = [
-		[ACTION_RESTART, "restart_pressed"],
-		[ACTION_SELECT, "select_pressed"],
-		[ACTION_REPLAY, "replay_pressed"],
+		[ACTION_RESTART, "restart_pressed", "restart"],
+		[ACTION_SELECT, "select_pressed", "levels"],
+		["分享本关", "share_pressed", "share"],
+		["偏好设置", "settings_pressed", "settings"],
+		[ACTION_REPLAY, "replay_pressed", "replay"],
 	]
-
 	for spec in specs:
-		var b := _make_button(I18n.t(str(spec[0])))
+		var b := _make_button("")
+		b.tooltip_text = I18n.t(str(spec[0]))
+		var icon := VectorIcon.new()
+		icon.icon_name = str(spec[2])
+		icon.tint = Color(0.90, 0.94, 1.0)
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		b.add_child(icon)
 		var sig: String = str(spec[1])
 		b.pressed.connect(func() -> void: emit_signal(sig))
 		_actions.add_child(b)
 		_action_buttons.append(b)
-		# 「回放」只在本关**确实有回放记录**时才出现：没有记录就没有按钮，
-		# 界面上不留一个永远点不动的死按钮。
-		if str(spec[0]) == ACTION_REPLAY:
+		_action_icons.append(icon)
+		if str(spec[2]) == "replay":
 			_replay_button = b
 			b.visible = false
 
@@ -202,6 +212,12 @@ func set_shown(on: bool) -> void:
 		_apply_layout()
 	else:
 		drag_end()
+
+func set_touch_mode(on: bool) -> void:
+	_touch_mode = on
+	if not on:
+		_hint.visible = false
+	_apply_layout()
 
 
 func is_shown() -> bool:
@@ -259,9 +275,11 @@ func set_replay_playing(playing: bool) -> void:
 	# 状态同时用**文字**和**颜色**表达：文字说清楚会发生什么，
 	# 颜色让它在余光里也能被注意到（视线通常在棋盘上）。
 	_replay_playing = playing
-	if _action_buttons.size() >= 3:
-		var b: Button = _action_buttons[2]
-		b.text = I18n.t(ACTION_STOP if playing else ACTION_REPLAY)
+	if _action_buttons.size() >= 5:
+		var b: Button = _action_buttons[4]
+		b.tooltip_text = I18n.t(ACTION_STOP if playing else ACTION_REPLAY)
+		_action_icons[4].icon_name = "stop" if playing else "replay"
+		_action_icons[4].queue_redraw()
 		if playing:
 			b.add_theme_stylebox_override("normal", _sb(Color(0.42, 0.16, 0.18, 0.80), Color(1.0, 0.55, 0.55, 0.65)))
 			b.add_theme_stylebox_override("hover", _sb(Color(0.55, 0.22, 0.24, 0.90), Color(1.0, 0.65, 0.65, 0.85)))
@@ -381,29 +399,28 @@ func _apply_layout() -> void:
 	var st: float = float(_insets.get("top", 0.0))
 
 	# 左下：D-pad（默认隐藏；打开时仍是菱形四角的对角箭头）
-	_pad.visible = _pad_enabled
+	_pad.visible = _touch_mode and _pad_enabled
 	_pad.position = Vector2(sl + margin, vp.y - sb - pad - margin)
 	_pad.size = Vector2(pad, pad)
 	for b in _dir_buttons:
 		b.custom_minimum_size = Vector2(_unit, _unit)
 		b.add_theme_font_size_override("font_size", int(_unit * 0.46))
 
-	# 右下：一排小胶囊（选关 / 重开 / 有回放时的回放）。
+	# 右下：一排方形图标（重开、选关、分享、偏好设置；有记录时另显示回放）。
 	# 每个按钮的高度就是"拇指落点"，所以下限钉在 44（约 44pt），上限别太大。
 	var visible_actions: Array = []
 	for b in _action_buttons:
 		if b.visible:
 			visible_actions.append(b)
-	var bh: float = clampf(_unit * 0.62, 44.0, 58.0)
-	var bw: float = bh * 1.45
-	var sep: float = maxf(_unit * 0.16, 8.0)
-	for b in _action_buttons:
+	var bh: float = clampf(_unit * 0.72, 48.0, 56.0)
+	var bw: float = bh
+	var sep: float = maxf(_unit * 0.10, 5.0)
+	for i in range(_action_buttons.size()):
+		var b: Button = _action_buttons[i]
 		b.custom_minimum_size = Vector2(bw, bh)
 		b.add_theme_font_size_override("font_size", int(bh * 0.36))
-	# 英文等语言可能更长（例如 Stop replay），按实际字体量宽。
-	for b in visible_actions:
-		var font: Font = b.get_theme_font("font")
-		bw = maxf(bw, font.get_string_size(b.text, HORIZONTAL_ALIGNMENT_LEFT, -1, b.get_theme_font_size("font_size")).x + 24.0)
+		if i < _action_icons.size():
+			_action_icons[i].custom_minimum_size = Vector2(bw * 0.68, bh * 0.68)
 	for b in _action_buttons:
 		b.custom_minimum_size.x = bw
 	var n: int = maxi(visible_actions.size(), 1)
@@ -411,22 +428,15 @@ func _apply_layout() -> void:
 	# 一行放不下（极窄屏 + 三个按钮）→ 按总宽缩字号与按钮宽，绝不换行堆高
 	var avail_w: float = vp.x - sl - sr - margin * 2.0
 	if aw > avail_w and aw > 1.0:
-		var k: float = avail_w / aw
-		bw = maxf(bw * k, 40.0)
-		bh = maxf(bh * k, 40.0)
+		bw = maxf((avail_w - sep * float(n - 1)) / float(n), 32.0)
+		bh = minf(bh, maxf(bw, 40.0))
 		aw = bw * float(n) + sep * float(n - 1)
-		for b in _action_buttons:
+		for i in range(_action_buttons.size()):
+			var b: Button = _action_buttons[i]
 			b.custom_minimum_size = Vector2(bw, bh)
 			b.add_theme_font_size_override("font_size", int(maxf(bh * 0.36, 11.0)))
-	# 收窄后再按按钮真实内边距量字，避免文本最小宽度重新撑开整排。
-	for b in visible_actions:
-		var font: Font = b.get_theme_font("font")
-		var font_size: int = b.get_theme_font_size("font_size")
-		var text_width: float = bw - b.get_theme_stylebox("normal").get_minimum_size().x
-		while font_size > 10 and font.get_string_size(b.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > text_width:
-			font_size -= 1
-		if font_size != b.get_theme_font_size("font_size"):
-			b.add_theme_font_size_override("font_size", font_size)
+			if i < _action_icons.size():
+				_action_icons[i].custom_minimum_size = Vector2(bw * 0.68, bh * 0.68)
 	_actions.size = Vector2(aw, bh)
 	_actions.position = Vector2(vp.x - sr - margin - aw, vp.y - sb - margin - bh)
 
@@ -450,6 +460,7 @@ func _apply_layout() -> void:
 	var above: float = (pad + margin + 10.0) if _pad_enabled else 0.0
 	var hint_y: float = vp.y - sb - margin - above - hs.y
 	_hint.position = Vector2(sl + margin, maxf(hint_y, st + 8.0))
+	_hint.visible = _touch_mode and _hint_timer > 0.0
 	# 窄屏提示和动作按钮放不进同一行时，提示上移，不缩成难读的小字。
 	if _hint.get_rect().intersects(_actions.get_rect()):
 		_hint.position.y = maxf(_actions.position.y - hs.y - 10.0, st + 8.0)
@@ -595,14 +606,26 @@ func _update_flash(delta: float) -> void:
 
 func apply_visual_theme(colors: Dictionary) -> void:
 	_theme_colors = colors
+	for icon in _action_icons:
+		icon.tint = colors["text"]
+		icon.queue_redraw()
 	for b in _dir_buttons + _action_buttons:
 		for state in ["font_color", "font_hover_color", "font_pressed_color"]:
 			b.add_theme_color_override(state, colors["text"])
 		b.add_theme_stylebox_override("normal", _sb(colors["panel"], Color(colors["muted"], 0.3)))
 		b.add_theme_stylebox_override("hover", _sb(colors["panel"].lightened(0.06), colors["accent"]))
 		b.add_theme_stylebox_override("pressed", _sb(colors["panel"].lightened(0.12), colors["accent"]))
+	for b in _action_buttons:
+		var normal: Color = colors["panel"]
+		normal.a = 0.94
+		var idle_edge: Color = colors["muted"]
+		idle_edge.a = 0.42
+		b.add_theme_stylebox_override("normal", _sb(normal, idle_edge))
+		b.add_theme_stylebox_override("hover", _sb(colors["panel"].lightened(0.08), colors["accent"]))
+		b.add_theme_stylebox_override("pressed", _sb(colors["accent"].darkened(0.24), colors["accent"]))
+		b.add_theme_stylebox_override("focus", _sb(colors["panel"].lightened(0.10), colors["accent"]))
 	_hint.get_theme_stylebox("panel").bg_color = colors["panel"]
 	_hint_label.add_theme_color_override("font_color", colors["text"])
 	if _replay_playing:
-		_action_buttons[2].add_theme_stylebox_override("normal", _sb(Color("713e42"), Color("ffac9b")))
-		_action_buttons[2].add_theme_color_override("font_color", Color("fff3ed"))
+		_action_buttons[4].add_theme_stylebox_override("normal", _sb(Color("713e42"), Color("ffac9b")))
+		_action_buttons[4].add_theme_color_override("font_color", Color("fff3ed"))

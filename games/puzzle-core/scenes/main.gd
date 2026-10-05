@@ -16,6 +16,7 @@ const Ending = preload("res://meta/ending.gd")
 const Leaderboard = preload("res://meta/leaderboard.gd")
 const Stopwatch = preload("res://meta/stopwatch.gd")
 const Share = preload("res://meta/share.gd")
+const VectorIcon = preload("res://meta/vector_icon.gd")
 const Campaign = preload("res://meta/campaign.gd")
 
 var game: Node3D = null
@@ -37,6 +38,12 @@ const REPLAY_BEAT := 0.34   # 回放每步之间的停顿（让回放看起来�
 var _replaying: bool = false
 var replay_label: Label
 var hud_layer: CanvasLayer
+var _desktop_toolbar: HBoxContainer
+var _desktop_replay_button: Button
+var _desktop_replay_state := false
+var share_toast: PanelContainer
+var share_toast_label: Label
+var _share_toast_epoch: int = 0
 # ?lite=1：低端 GPU / 排障开关——关阴影与渐变幕布、停逐帧材质更新
 var lite_mode: bool = false
 # 触屏操作层（仅在触屏设备显示；可用 ?touch=1 / ?touch=0 强制，桌面可按 T 切换）
@@ -210,6 +217,7 @@ func _process(delta: float) -> void:
 			_refresh_bands()
 	_refresh_clock()
 	_update_clock_label()
+	_sync_desktop_replay()
 	_flush_pending_move()
 	# 自适应画质：按实测帧时间升降档（带滞回，避免抖动）
 	_q_accum += delta
@@ -323,6 +331,7 @@ func _on_viewport_resized() -> void:
 	_apply_tv_ui_scale()
 	_update_safe_area()
 	_refresh_bands()
+	_layout_share_toast()
 	_frame_camera()
 
 
@@ -455,12 +464,46 @@ func _on_share_requested(index: int) -> void:
 	DisplayServer.clipboard_set(text)
 	if level_select != null:
 		level_select.set_share_button_text(I18n.t("已复制链接"))
-		# 两秒后恢复按钮文案（否则「已复制」会一直挂着，看起来像坏了）
-		var tw := create_tween()
-		tw.tween_interval(2.0)
-		tw.tween_callback(func() -> void:
-			if level_select != null:
-				level_select.set_share_button_text(I18n.t("分享本关")))
+	_show_share_toast()
+
+
+
+func _show_share_toast() -> void:
+	if share_toast == null or not is_instance_valid(share_toast):
+		return
+	_share_toast_epoch += 1
+	var epoch: int = _share_toast_epoch
+	share_toast_label.text = I18n.t("已复制链接")
+	share_toast.visible = true
+	share_toast.modulate.a = 1.0
+	_layout_share_toast()
+	# 避免提示和教学文案争用同一块屏幕空间；教学提示会在 toast 收起时恢复。
+	if lesson_label != null:
+		lesson_label.visible = false
+	await get_tree().create_timer(2.2).timeout
+	if epoch != _share_toast_epoch or not is_instance_valid(share_toast):
+		return
+	share_toast.visible = false
+	if level_select != null:
+		level_select.set_share_button_text(I18n.t("分享本关"))
+	_refresh_bands()
+
+
+func _layout_share_toast() -> void:
+	if share_toast == null or not is_instance_valid(share_toast):
+		return
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var sl: float = float(_safe_insets.get("left", 0.0))
+	var sr: float = float(_safe_insets.get("right", 0.0))
+	var sb: float = float(_safe_insets.get("bottom", 0.0))
+	var available_w: float = maxf(vp.x - sl - sr - 24.0, 120.0)
+	var wanted_w: float = share_toast.get_combined_minimum_size().x
+	var width: float = minf(available_w, maxf(wanted_w, 132.0))
+	share_toast.position = Vector2((vp.x - width) * 0.5, 0.0)
+	share_toast.size = Vector2(width, 42.0)
+	var touch_on: bool = touch_controls != null and touch_controls.is_shown()
+	var reserved: float = touch_controls.bottom_inset() if touch_on else sb + 24.0
+	share_toast.position.y = maxf(float(_safe_insets.get("top", 0.0)) + 96.0, vp.y - reserved - share_toast.size.y - 10.0)
 
 
 func _finish_challenge(res: Dictionary) -> void:
@@ -570,6 +613,7 @@ func _apply_hud_insets() -> void:
 	right_panel.offset_top = st
 	right_panel.offset_bottom = st + RIGHT_PANEL_H
 	_update_hud()
+	call_deferred("_refit_hud_values")
 
 
 func _setup_touch_controls() -> void:
@@ -580,6 +624,8 @@ func _setup_touch_controls() -> void:
 	touch_controls.restart_pressed.connect(_on_touch_restart)
 	touch_controls.select_pressed.connect(_open_level_select)
 	touch_controls.replay_pressed.connect(_on_touch_replay)
+	touch_controls.share_pressed.connect(func() -> void: _on_share_requested(current_index))
+	touch_controls.settings_pressed.connect(_open_preferences)
 	# 方向键是玩家偏好（默认关）：启动时就按他的选择摆好
 	touch_controls.set_pad_enabled(progress != null and progress.pad_enabled())
 	_touch_active = _touch_wanted()
@@ -600,7 +646,12 @@ func _apply_touch_visibility() -> void:
 		return
 	var hud_hidden: bool = hud_layer != null and not hud_layer.visible
 	touch_controls.set_shown(_touch_active and not hud_hidden)
+	touch_controls.set_touch_mode(_touch_active)
+	if _desktop_toolbar != null:
+		_desktop_toolbar.visible = not _touch_active and not hud_hidden
+		_layout_desktop_toolbar()
 	_refresh_bands()
+	_layout_share_toast()
 
 
 func _can_move() -> bool:
@@ -680,7 +731,7 @@ func _refresh_bands() -> void:
 		lesson_label.add_theme_font_size_override("font_size", 16)
 		if touch_on and vp.x > vp.y:
 			# 横屏棋盘靠近顶部；教学放在底部动作区上方的一行空隙。
-			lesson_label.offset_top = vp.y - touch_controls.bottom_inset() - 22.0
+			lesson_label.offset_top = vp.y - touch_controls.bottom_inset() - 40.0
 			lesson_label.offset_bottom = lesson_label.offset_top + 22.0
 			lesson_label.add_theme_font_size_override("font_size", 14)
 		lesson_label.visible = _lesson_left > 0.0 and not lesson_label.text.is_empty() \
@@ -946,7 +997,6 @@ func _setup_level_select() -> void:
 	level_select.theme_requested.connect(_on_theme_requested)
 	level_select.theme_selected.connect(_on_theme_selected)
 	level_select.language_requested.connect(_on_language_requested)
-	level_select.share_requested.connect(_on_share_requested)
 
 
 func _setup_ending() -> void:
@@ -999,6 +1049,10 @@ func _show_ending() -> void:
 
 
 func _open_level_select() -> void:
+	_open_game_menu(false)
+
+
+func _open_game_menu(open_preferences: bool) -> void:
 	_clear_pending_move()
 	# 失败后也能换关；通关后打开菜单则停止自动换关。
 	if transitioning or _replaying:
@@ -1008,7 +1062,7 @@ func _open_level_select() -> void:
 	_hide_hud(true)
 	level_select.touch_mode = _touch_active
 	level_select.set_safe_insets(_safe_insets)
-	level_select.open_with(entries, progress, current_index)
+	level_select.open_with(entries, progress, current_index, open_preferences)
 	# 停表必须放在**界面真正打开之后**：判据是 level_select.is_open()，
 	# 放在 open_with 之前的话判据还是假，等于没停（这里踩过一次）
 	_refresh_clock()
@@ -1059,7 +1113,7 @@ func _on_celebration_requested() -> void:
 
 func _on_progress_reset() -> void:
 	progress.reset()
-	level_select.open_with(entries, progress, current_index)
+	level_select.open_with(entries, progress, current_index, level_select._settings_open)
 
 
 # ── 回放（最佳记录重演）──────────────────────────────────
@@ -1239,6 +1293,9 @@ func _update_hud() -> void:
 	# 「回放」按钮只在本关**确实有回放记录**时出现（没有记录就不留死按钮）
 	if touch_controls != null:
 		touch_controls.set_replay_available(progress.has_replay(_level_key(current_index)))
+	if _desktop_replay_button != null:
+		_desktop_replay_button.visible = progress.has_replay(_level_key(current_index))
+		_layout_desktop_toolbar()
 	moves_label.text = I18n.t("步数 %d") % game.move_count
 	_fit_hud_label(moves_label)
 	_update_clock_label(true)
@@ -1486,14 +1543,19 @@ func _setup_hud() -> void:
 	left.offset_right = HUD_MARGIN + LEFT_PANEL_W
 	left.offset_bottom = HUD_MARGIN + LEFT_PANEL_H
 	var col := VBoxContainer.new()
-	col.add_theme_constant_override("separation", 9)
+	col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col.add_theme_constant_override("separation", 5)
 	level_label = Label.new()
-	level_label.add_theme_font_size_override("font_size", 21)
+	level_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	level_label.add_theme_font_size_override("font_size", 19)
 	level_label.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0))
+	level_label.clip_text = true
 	col.add_child(level_label)
 	# 好友挑战的目标（只在挑战模式出现；它不是「持续状态」，是启动参数带来的上下文）
 	challenge_label = Label.new()
 	challenge_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	challenge_label.clip_text = true
+	challenge_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	challenge_label.add_theme_font_size_override("font_size", 14)
 	challenge_label.add_theme_color_override("font_color", Color(0.55, 1.0, 0.78))
 	challenge_label.visible = false
@@ -1524,7 +1586,7 @@ func _setup_hud() -> void:
 	rrow.alignment = FlowContainer.ALIGNMENT_CENTER
 	moves_label = Label.new()
 	moves_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	moves_label.add_theme_font_size_override("font_size", 20)
+	moves_label.add_theme_font_size_override("font_size", 19)
 	moves_label.add_theme_color_override("font_color", Color(0.92, 0.95, 1.0))
 	rrow.add_child(moves_label)
 	time_label = Label.new()
@@ -1558,7 +1620,141 @@ func _setup_hud() -> void:
 	lesson_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	lesson_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	lesson_label.visible = false
+	share_toast = PanelContainer.new()
+	share_toast.name = "ShareFeedbackToast"
+	share_toast.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	share_toast.visible = false
+	var toast_style := StyleBoxFlat.new()
+	toast_style.bg_color = Color("20322ef2")
+	toast_style.set_corner_radius_all(14)
+	toast_style.set_border_width_all(1)
+	toast_style.content_margin_left = 16.0
+	toast_style.content_margin_right = 16.0
+	toast_style.content_margin_top = 8.0
+	toast_style.content_margin_bottom = 8.0
+	share_toast.add_theme_stylebox_override("panel", toast_style)
+	share_toast_label = Label.new()
+	share_toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	share_toast_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	share_toast_label.add_theme_font_size_override("font_size", 15)
+	share_toast_label.add_theme_color_override("font_color", Color("f3f1e3"))
+	share_toast_label.text = I18n.t("已复制链接")
+	share_toast.add_child(share_toast_label)
+	hud.add_child(share_toast)
 	_fade_help_later()
+
+	_desktop_toolbar = HBoxContainer.new()
+	_desktop_toolbar.name = "GameActionToolbar"
+	_desktop_toolbar.add_theme_constant_override("separation", 6)
+	_desktop_toolbar.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_desktop_toolbar.mouse_filter = Control.MOUSE_FILTER_STOP
+	hud.add_child(_desktop_toolbar)
+	_add_desktop_action("restart", "重开", _on_touch_restart)
+	_add_desktop_action("levels", "选关", _open_level_select)
+	_add_desktop_action("share", "分享本关", func() -> void: _on_share_requested(current_index))
+	_add_desktop_action("settings", "偏好设置", _open_preferences)
+	_desktop_replay_button = _add_desktop_action("replay", "回放", _on_touch_replay)
+	_desktop_replay_button.visible = false
+	_layout_desktop_toolbar()
+
+
+func _add_desktop_action(icon_name: String, message: String, callback: Callable) -> Button:
+	var b := Button.new()
+	b.tooltip_text = I18n.t(message)
+	b.custom_minimum_size = Vector2(44.0, 44.0)
+	b.pressed.connect(callback)
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(0.08, 0.10, 0.16, 0.92)
+	normal.set_corner_radius_all(14)
+	normal.set_border_width_all(1)
+	normal.border_color = Color(0.72, 0.79, 0.91, 0.28)
+	b.add_theme_stylebox_override("normal", normal)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(0.14, 0.18, 0.28, 0.98)
+	hover.border_color = Color(0.64, 0.79, 1.0, 0.80)
+	b.add_theme_stylebox_override("hover", hover)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(0.20, 0.30, 0.46, 1.0)
+	pressed.border_color = Color(0.70, 0.84, 1.0, 0.95)
+	b.add_theme_stylebox_override("pressed", pressed)
+	b.add_theme_stylebox_override("focus", hover)
+	var icon := VectorIcon.new()
+	icon.icon_name = icon_name
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	b.add_child(icon)
+	_desktop_toolbar.add_child(b)
+	return b
+
+
+func _apply_desktop_action_theme(button: Button, colors: Dictionary) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = colors["panel"]
+	normal.bg_color.a = 0.94
+	normal.set_corner_radius_all(14)
+	normal.set_border_width_all(1)
+	normal.border_color = colors["muted"]
+	normal.border_color.a = 0.48
+	button.add_theme_stylebox_override("normal", normal)
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = colors["panel"].lightened(0.10)
+	hover.border_color = colors["accent"]
+	hover.border_color.a = 0.90
+	button.add_theme_stylebox_override("hover", hover)
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = colors["accent"].darkened(0.24)
+	pressed.border_color = colors["accent"]
+	button.add_theme_stylebox_override("pressed", pressed)
+	button.add_theme_stylebox_override("focus", hover)
+
+
+func _sync_desktop_replay() -> void:
+	if _desktop_replay_button == null or _desktop_replay_state == _replaying:
+		return
+	_desktop_replay_state = _replaying
+	_desktop_replay_button.tooltip_text = I18n.t("停止回放" if _replaying else "回放")
+	var icon: Variant = _desktop_replay_button.get_child(0)
+	icon.icon_name = "stop" if _replaying else "replay"
+	icon.tint = Color("ffb2ae") if _replaying else VisualTheme.palette(progress.visual_theme())["text"]
+	icon.queue_redraw()
+	if _replaying:
+		var stop_style := StyleBoxFlat.new()
+		stop_style.bg_color = Color(0.42, 0.16, 0.18, 0.94)
+		stop_style.set_corner_radius_all(14)
+		stop_style.set_border_width_all(1)
+		stop_style.border_color = Color(1.0, 0.55, 0.55, 0.85)
+		_desktop_replay_button.add_theme_stylebox_override("normal", stop_style)
+		var stop_hover := stop_style.duplicate() as StyleBoxFlat
+		stop_hover.bg_color = Color(0.55, 0.22, 0.24, 0.98)
+		stop_hover.border_color = Color(1.0, 0.65, 0.65, 1.0)
+		_desktop_replay_button.add_theme_stylebox_override("hover", stop_hover)
+	else:
+		_apply_desktop_action_theme(_desktop_replay_button, VisualTheme.palette(progress.visual_theme()))
+
+
+func _layout_desktop_toolbar() -> void:
+	if _desktop_toolbar == null:
+		return
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var side: float = clampf(vp.x * 0.11, 40.0, 46.0)
+	for button in _desktop_toolbar.get_children():
+		button.custom_minimum_size = Vector2(side, side)
+	var visible_count := 0
+	for button in _desktop_toolbar.get_children():
+		if button.visible:
+			visible_count += 1
+	var gap := 7.0
+	var width := side * float(visible_count) + gap * float(maxi(visible_count - 1, 0))
+	_desktop_toolbar.add_theme_constant_override("separation", int(gap))
+	_desktop_toolbar.offset_left = -width - 12.0
+	_desktop_toolbar.offset_right = -12.0
+	var top: float = float(_safe_insets.get("top", 0.0)) + HUD_MARGIN + RIGHT_PANEL_H + 10.0
+	_desktop_toolbar.offset_top = top
+	_desktop_toolbar.offset_bottom = top + side
+
+
+func _open_preferences() -> void:
+	_open_game_menu(true)
 
 
 func _make_panel(parent: Node) -> PanelContainer:
@@ -1566,13 +1762,13 @@ func _make_panel(parent: Node) -> PanelContainer:
 	var pc := PanelContainer.new()
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.07, 0.09, 0.15, 0.55)
-	sb.set_corner_radius_all(14)
+	sb.set_corner_radius_all(16)
 	# 内边距直接决定面板的最小高度（PanelContainer 不会被 offset 压到比内容还小），
 	# 所以"紧凑"要在这里改：12 → 7，四周留白从"宽裕"变"刚好"。
-	sb.content_margin_left = 14.0
-	sb.content_margin_right = 14.0
-	sb.content_margin_top = 6.0
-	sb.content_margin_bottom = 6.0
+	sb.content_margin_left = 12.0
+	sb.content_margin_right = 12.0
+	sb.content_margin_top = 7.0
+	sb.content_margin_bottom = 7.0
 	sb.border_color = Color(1.0, 1.0, 1.0, 0.07)
 	sb.set_border_width_all(1)
 	pc.add_theme_stylebox_override("panel", sb)
@@ -1632,11 +1828,25 @@ func _apply_visual_theme(id: String) -> void:
 		label.add_theme_color_override("font_color", colors["muted"])
 	for label in [win_label, challenge_label]:
 		label.add_theme_color_override("font_color", colors["accent"])
+	if share_toast != null:
+		var toast_style: StyleBoxFlat = share_toast.get_theme_stylebox("panel")
+		toast_style.bg_color = colors["panel"]
+		toast_style.border_color = Color(colors["accent"], 0.72)
+		share_toast_label.add_theme_color_override("font_color", colors["text"])
 	fail_label.add_theme_color_override("font_color", Color("aa3e32") if id == "porcelain" else Color("ffac9b"))
 	for label in [help_label, lesson_label, win_label, fail_label, replay_label]:
 		label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.0 if id == "porcelain" else 0.4))
 	if touch_controls != null:
 		touch_controls.apply_visual_theme(colors)
+	if _desktop_toolbar != null:
+		for button in _desktop_toolbar.get_children():
+			var icon: Variant = button.get_child(0)
+			icon.tint = colors["text"]
+			icon.queue_redraw()
+			_apply_desktop_action_theme(button, colors)
+		if _replaying:
+			_desktop_replay_state = false
+			_sync_desktop_replay()
 	if OS.has_feature("web"):
 		JavaScriptBridge.eval("try { localStorage.setItem('gf-theme', %s); } catch (_) {}" % JSON.stringify(VisualTheme.valid(id)), true)
 
@@ -1644,7 +1854,6 @@ func _on_theme_selected(id: String) -> void:
 	progress.set_visual_theme(id)
 	_apply_visual_theme(progress.visual_theme())
 	level_select._theme_btn.text = I18n.t("主题：%s") % VisualTheme.title(progress.visual_theme())
-	level_select.close()
 
 func _on_theme_requested() -> void:
 	progress.set_visual_theme(VisualTheme.next(progress.visual_theme()))
@@ -1661,20 +1870,25 @@ func _refresh_language() -> void:
 	var menu_open: bool = level_select.is_open()
 	var celebration_open: bool = ending.is_open()
 	var scroll_position: int = level_select._scroll.scroll_vertical
+	var preferences_open: bool = level_select._settings_open
 	level_select.visible = false
 	level_select.queue_free()
 	_setup_level_select()
 	for i in range(entries.size()):
 		entries[i]["title"] = Campaign.title(i)
 	if menu_open:
-		_open_level_select()
-		level_select._scroll.set_deferred("scroll_vertical", scroll_position)
+		_open_game_menu(preferences_open)
+		if not preferences_open:
+			level_select._scroll.set_deferred("scroll_vertical", scroll_position)
 	if touch_controls != null:
 		touch_controls._hint_label.text = I18n.t(TouchControls.HINT_TEXT)
-		for pair in [[touch_controls._action_buttons[0], "重开"], [touch_controls._action_buttons[1], "选关"], [touch_controls._action_buttons[2], "回放"]]:
-			pair[0].text = I18n.t(pair[1])
+		for pair in [[0, "重开"], [1, "选关"], [2, "分享本关"], [3, "偏好设置"], [4, "回放"]]:
+			touch_controls._action_buttons[pair[0]].tooltip_text = I18n.t(pair[1])
 		touch_controls.set_replay_playing(_replaying)
 		touch_controls._apply_layout()
+	if _desktop_toolbar != null:
+		for pair in [[0, "重开"], [1, "选关"], [2, "分享本关"], [3, "偏好设置"], [4, "回放"]]:
+			_desktop_toolbar.get_child(pair[0]).tooltip_text = I18n.t(pair[1])
 	_update_hud()
 	if win_label.visible and not _last_win_result.is_empty():
 		win_label.text = _win_text(_last_win_result)
@@ -1689,15 +1903,22 @@ func _refresh_language() -> void:
 
 
 func _fit_hud_label(label: Label) -> void:
-	if right_panel == null:
+	if right_panel == null or right_panel.size.x < 80.0:
 		return
-	var width: float = maxf(right_panel.size.x - 28.0, 1.0)
+	var width: float = right_panel.size.x - 28.0
 	var font: Font = label.get_theme_font("font")
 	var font_size: int = label.get_theme_font_size("font_size")
 	while font_size > 10 and font.get_string_size(label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x > width:
 		font_size -= 1
 	if font_size != label.get_theme_font_size("font_size"):
 		label.add_theme_font_size_override("font_size", font_size)
+
+
+func _refit_hud_values() -> void:
+	# Canvas offsets apply before the next layout pass; measure only after the
+	# panel has a real width so startup cannot collapse the score labels.
+	_fit_hud_label(moves_label)
+	_fit_hud_label(time_label)
 
 
 func _sync_hud_height() -> void:
