@@ -86,6 +86,7 @@ var _hint: PanelContainer
 var _hint_label: Label
 var _dir_buttons: Array = []
 var _action_buttons: Array = []
+var _theme_colors: Dictionary = {}
 var _replay_button: Button = null
 var _unit: float = 64.0
 var _screen_dirs: Dictionary = {}   # 由 main.gd 用相机 unproject 现算后注入
@@ -268,6 +269,8 @@ func set_replay_playing(playing: bool) -> void:
 			b.add_theme_stylebox_override("normal", _sb(Color(0.09, 0.12, 0.20, 0.62), Color(1, 1, 1, 0.14)))
 			b.add_theme_stylebox_override("hover", _sb(Color(0.14, 0.19, 0.30, 0.72), Color(0.55, 0.75, 1.0, 0.60)))
 
+	if not _theme_colors.is_empty():
+		apply_visual_theme(_theme_colors)
 	_apply_layout()
 
 
@@ -588,3 +591,18 @@ func _update_flash(delta: float) -> void:
 		var b: Button = _dir_buttons[i]
 		var on: bool = _flash.has(_btn_dirs[i])
 		b.modulate = Color(1.10, 1.16, 1.28) if on else Color.WHITE
+
+
+func apply_visual_theme(colors: Dictionary) -> void:
+	_theme_colors = colors
+	for b in _dir_buttons + _action_buttons:
+		for state in ["font_color", "font_hover_color", "font_pressed_color"]:
+			b.add_theme_color_override(state, colors["text"])
+		b.add_theme_stylebox_override("normal", _sb(colors["panel"], Color(colors["muted"], 0.3)))
+		b.add_theme_stylebox_override("hover", _sb(colors["panel"].lightened(0.06), colors["accent"]))
+		b.add_theme_stylebox_override("pressed", _sb(colors["panel"].lightened(0.12), colors["accent"]))
+	_hint.get_theme_stylebox("panel").bg_color = colors["panel"]
+	_hint_label.add_theme_color_override("font_color", colors["text"])
+	if _replay_playing:
+		_action_buttons[2].add_theme_stylebox_override("normal", _sb(Color("713e42"), Color("ffac9b")))
+		_action_buttons[2].add_theme_color_override("font_color", Color("fff3ed"))

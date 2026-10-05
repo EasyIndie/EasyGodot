@@ -96,7 +96,7 @@ const RIGHT_PANEL_H := 60.0
 const RIGHT_PANEL_H_ONE_LINE := 40.0
 const HUD_MARGIN := 14.0
 
-const LIGHT_ENERGY := 1.15  # 主光基础亮度
+var LIGHT_ENERGY := 1.15  # 主光基础亮度
 
 # 关卡切换过渡（棋盘下沉 + 暗幕，衔接自然）
 const FADE_TIME := 0.4      # 暗幕淡入/淡出时长（秒）
@@ -944,6 +944,7 @@ func _setup_level_select() -> void:
 	level_select.ghost_toggled.connect(_on_ghost_toggled)
 	level_select.pad_toggled.connect(_on_pad_toggled)
 	level_select.theme_requested.connect(_on_theme_requested)
+	level_select.theme_selected.connect(_on_theme_selected)
 	level_select.language_requested.connect(_on_language_requested)
 	level_select.share_requested.connect(_on_share_requested)
 
@@ -1614,8 +1615,36 @@ func _apply_visual_theme(id: String) -> void:
 	if backdrop != null:
 		for part in ["top", "mid", "bottom"]:
 			backdrop.material_override.set_shader_parameter(part + "_color", colors["bg_" + part])
+	LIGHT_ENERGY = colors["energy"]
+	light.light_energy = LIGHT_ENERGY
+	light.light_color = colors["light"]
+	var environment: Environment = get_node("WorldEnvironment").environment
+	environment.background_color = colors["bg_mid"]
+	environment.ambient_light_color = colors["ambient"]
+	environment.ambient_light_energy = colors["ambient_energy"]
+	for panel in [left_panel, right_panel]:
+		var style: StyleBoxFlat = panel.get_theme_stylebox("panel")
+		style.bg_color = colors["panel"]
+		style.border_color = Color(colors["muted"], 0.18)
+	for label in [level_label, moves_label, help_label, lesson_label, replay_label]:
+		label.add_theme_color_override("font_color", colors["text"])
+	for label in [time_label, best_label]:
+		label.add_theme_color_override("font_color", colors["muted"])
+	for label in [win_label, challenge_label]:
+		label.add_theme_color_override("font_color", colors["accent"])
+	fail_label.add_theme_color_override("font_color", Color("aa3e32") if id == "porcelain" else Color("ffac9b"))
+	for label in [help_label, lesson_label, win_label, fail_label, replay_label]:
+		label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.0 if id == "porcelain" else 0.4))
+	if touch_controls != null:
+		touch_controls.apply_visual_theme(colors)
 	if OS.has_feature("web"):
 		JavaScriptBridge.eval("try { localStorage.setItem('gf-theme', %s); } catch (_) {}" % JSON.stringify(VisualTheme.valid(id)), true)
+
+func _on_theme_selected(id: String) -> void:
+	progress.set_visual_theme(id)
+	_apply_visual_theme(progress.visual_theme())
+	level_select._theme_btn.text = I18n.t("主题：%s") % VisualTheme.title(progress.visual_theme())
+	level_select.close()
 
 func _on_theme_requested() -> void:
 	progress.set_visual_theme(VisualTheme.next(progress.visual_theme()))

@@ -4,7 +4,7 @@
   try { preference = localStorage.getItem('gf-language') || preference; theme = localStorage.getItem('gf-theme') || theme; } catch (_) {}
   const locale = preference === 'system' ? (navigator.language || 'en') : preference;
   document.documentElement.lang = /^zh(?:[-_]|$)/i.test(locale) ? 'zh' : 'en';
-  document.documentElement.dataset.theme = ['mist', 'porcelain', 'candy'].includes(theme) ? theme : 'mist';
+  document.documentElement.dataset.theme = ['mist', 'porcelain', 'candy', 'abyss'].includes(theme) ? theme : 'mist';
 })();
 </script>
 <!--
@@ -117,8 +117,8 @@
   }
   html:lang(en) #status::before { content: "Roll the Block"; letter-spacing: .08em; }
   html:lang(en) #status::after { content: "Loading…"; }
-  html[data-theme="candy"] #status-progress::-webkit-progress-value { background: linear-gradient(90deg, #ef9181, #b2a5dd, #b4ffe3); }
-  html[data-theme="porcelain"] #status-progress::-webkit-progress-value { background: linear-gradient(90deg, #dda351, #e0e5e8, #b4ffe3); }
+  html[data-theme="candy"] #status-progress::-webkit-progress-value { background: linear-gradient(90deg, #e0a7b0, #71648e, #8ddcdd); }
+  html[data-theme="porcelain"] #status-progress::-webkit-progress-value { background: linear-gradient(90deg, #af5741, #c8b5a0, #c4e6bf); }
   #status-notice {
     order: 4;
     background-color: #2a1c22 !important;
@@ -308,3 +308,5 @@
   if (window.Godot && window.Godot.runtime) { /* 无操作：仅保持时序明确 */ }
 })();
 </script>
+
+<style>html[data-theme="abyss"] #status-progress::-webkit-progress-value { background: linear-gradient(90deg, #e3a94e, #254a65, #60e0d4); }</style>

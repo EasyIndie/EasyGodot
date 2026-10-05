@@ -638,7 +638,9 @@ func _make_tile_material(base: Color, glow: float = 0.0) -> ShaderMaterial:
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 uniform vec3 base_color : source_color = vec3(0.38, 0.46, 0.66);
-uniform float top_boost = 0.10;
+uniform float top_boost = 0.025;
+uniform float surface_roughness = 0.75;
+uniform float surface_metallic = 0.0;
 uniform float edge_dark = 0.12;
 uniform float glow : hint_range(0.0, 2.0) = 0.0;
 void fragment() {
@@ -649,15 +651,17 @@ void fragment() {
 	float rim = smoothstep(0.0, 0.09, min(e.x, e.y));
 	c *= mix(0.95, 1.0, rim);
 	ALBEDO = c;
-	ROUGHNESS = 0.46;
-	METALLIC = 0.0;
+	ROUGHNESS = surface_roughness;
+	METALLIC = surface_metallic;
 	EMISSION = base_color * glow;
 }
 """
 	var mat := ShaderMaterial.new()
 	mat.shader = sh
 	mat.set_shader_parameter("base_color", base)
-	mat.set_shader_parameter("glow", glow)
+	mat.set_shader_parameter("glow", glow * 0.35)
+	mat.set_shader_parameter("surface_roughness", _colors["roughness"])
+	mat.set_shader_parameter("surface_metallic", _colors["metallic"])
 	return mat
 
 
@@ -676,7 +680,7 @@ uniform vec3 ring_color : source_color = vec3(0.35, 1.0, 0.70);
 uniform float energy = 1.0;
 void fragment() {
 	ALBEDO = ring_color * energy;
-	EMISSION = ring_color * energy;
+	EMISSION = vec3(0.0);
 }
 """
 	var mat := ShaderMaterial.new()
@@ -889,15 +893,17 @@ shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 uniform vec3 base_color : source_color = vec3(1.0, 0.6, 0.22);
 uniform float flash = 0.0;
+uniform float surface_roughness = 0.5;
+uniform float surface_metallic = 0.1;
 void fragment() {
 	vec3 wn = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	float up = clamp(wn.y, 0.0, 1.0);
-	vec3 c = base_color * mix(0.88, 1.12, up);
+	vec3 c = base_color * mix(0.82, 1.02, up);
 	float fres = pow(1.0 - clamp(dot(normalize(NORMAL), VIEW), 0.0, 1.0), 2.5);
-	c += vec3(0.34, 0.40, 0.52) * fres * 0.12;
+	c += vec3(0.34, 0.40, 0.52) * fres * 0.035;
 	ALBEDO = c;
-	ROUGHNESS = 0.36;
-	METALLIC = 0.08;
+	ROUGHNESS = surface_roughness;
+	METALLIC = surface_metallic;
 	EMISSION = (base_color * 0.8 + vec3(0.5)) * flash;
 }
 """
@@ -905,6 +911,8 @@ void fragment() {
 	mat.shader = sh
 	mat.set_shader_parameter("base_color", base)
 	mat.set_shader_parameter("flash", 0.0)
+	mat.set_shader_parameter("surface_roughness", _colors["block_roughness"])
+	mat.set_shader_parameter("surface_metallic", _colors["block_metallic"])
 	return mat
 
 
@@ -942,7 +950,7 @@ func _process(delta: float) -> void:
 	_glow_t += delta
 	var pulse: float = 0.5 + 0.42 * sin(_glow_t * 2.0)
 	if _tile_mat_goal != null:
-		_tile_mat_goal.set_shader_parameter("glow", 0.12 + 0.14 * pulse)
+		_tile_mat_goal.set_shader_parameter("glow", 0.035 + 0.045 * pulse)
 	for r in goal_rings:
 		if not is_instance_valid(r):
 			continue
@@ -1075,6 +1083,8 @@ func set_visual_theme(id: String) -> void:
 	for entry in bindings:
 		if entry[0] != null:
 			entry[0].set_shader_parameter("base_color", _colors[entry[1]])
+			entry[0].set_shader_parameter("surface_roughness", _colors["block_roughness" if entry[1] == "block" else "roughness"])
+			entry[0].set_shader_parameter("surface_metallic", _colors["block_metallic" if entry[1] == "block" else "metallic"])
 	for ring in goal_rings:
 		ring.material_override.set_shader_parameter("ring_color", _colors["ring"])
 	for root_node in [_ghost, _ghost_rig]:

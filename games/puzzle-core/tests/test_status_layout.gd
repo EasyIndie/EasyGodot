@@ -96,6 +96,23 @@ func _run() -> void:
 	press.pressed = false
 	menu._input(press)
 	check(not menu.is_open(), "滚动后的返回游戏按钮仍能点按")
+	# 覆盖 2/3/4/5 列及断点两侧，检查实际容器排版而非只验证计算值。
+	menu.open_with(scene.entries, scene.progress, scene.current_index)
+	for width in [240, 390, 723, 724, 800, 923, 924, 1280]:
+		root.size = Vector2i(width, 800)
+		await process_frame
+		menu._apply_layout()
+		for frame in range(4):
+			await process_frame
+		var columns: int = menu._grid.columns
+		var first: Rect2 = menu._cards[0].get_global_rect()
+		var last: Rect2 = menu._cards[columns - 1].get_global_rect()
+		var grid: Rect2 = menu._grid.get_global_rect()
+		check(absf(first.position.x - grid.position.x) <= 1.0, "首列与网格左侧齐边：%d" % width)
+		check(absf(last.end.x - grid.end.x) <= 1.0, "末列占满网格右侧：%d列/%dpx" % [columns, width])
+		check(grid.end.x <= width, "网格不溢出屏幕：%d" % width)
+		for col in range(columns):
+			check(absf(menu._cards[col].size.x - first.size.x) <= 1.0, "各列均分可用宽度")
 	scene.free()
 	DirAccess.remove_absolute(ProjectSettings.globalize_path(save_path))
 	print(JSON.stringify({"suite": "test_status_layout", "checks": checks, "failures": failures, "status": "ok" if failures == 0 else "fail"}))

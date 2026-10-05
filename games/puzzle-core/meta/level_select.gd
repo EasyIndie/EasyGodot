@@ -17,6 +17,7 @@ const UiLayout = preload("res://meta/ui_layout.gd")
 const Shapes = preload("res://core/shapes.gd")
 
 signal level_chosen(index: int)
+signal theme_selected(id: String)
 signal theme_requested
 signal language_requested
 signal closed
@@ -55,6 +56,7 @@ var _hint: Label
 var _reset_btn: Button
 var _ghost_btn: Button
 var _theme_btn: Button
+var _theme_choices: Dictionary = {}
 var _language_btn: Button
 var _pad_btn: Button
 var _share_btn: Button
@@ -132,6 +134,32 @@ func _ready() -> void:
 	_subtitle.add_theme_color_override("font_color", FG_OPT)
 	box.add_child(_subtitle)
 
+	_theme_btn = Button.new()
+	_theme_btn.custom_minimum_size.y = 44.0
+	_theme_btn.pressed.connect(func() -> void: theme_requested.emit())
+	box.add_child(_theme_btn)
+	var theme_grid := GridContainer.new()
+	theme_grid.columns = 2
+	theme_grid.add_theme_constant_override("h_separation", 8)
+	theme_grid.add_theme_constant_override("v_separation", 8)
+	box.add_child(theme_grid)
+	var visual_theme = preload("res://meta/visual_theme.gd")
+	for theme_id in visual_theme.IDS:
+		var choice := Button.new()
+		choice.text = visual_theme.title(theme_id).replace(" ", "\n")
+		choice.clip_text = true
+		choice.custom_minimum_size.y = 44.0
+		choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		choice.add_theme_font_size_override("font_size", 13)
+		var colors: Dictionary = visual_theme.palette(theme_id)
+		for state in ["font_color", "font_hover_color", "font_pressed_color"]:
+			choice.add_theme_color_override(state, colors["text"])
+		choice.add_theme_stylebox_override("normal", _sb(colors["panel"], colors["block"], 1))
+		choice.add_theme_stylebox_override("hover", _sb(colors["panel"].lightened(0.08), colors["block"], 2))
+		choice.add_theme_stylebox_override("pressed", _sb(colors["panel"], colors["block"], 3))
+		choice.pressed.connect(func() -> void: theme_selected.emit(theme_id))
+		_theme_choices[theme_id] = choice
+		theme_grid.add_child(choice)
 	_grid = GridContainer.new()
 	_grid.columns = COLS
 	_grid.add_theme_constant_override("h_separation", 8)
@@ -227,10 +255,6 @@ func _ready() -> void:
 	_reset_btn.pressed.connect(_on_reset_pressed)
 	row.add_child(_reset_btn)
 
-	_theme_btn = Button.new()
-	_theme_btn.custom_minimum_size.y = 44.0
-	_theme_btn.pressed.connect(func() -> void: theme_requested.emit())
-	box.add_child(_theme_btn)
 	_language_btn = Button.new()
 	_language_btn.custom_minimum_size.y = 44.0
 	_language_btn.pressed.connect(func() -> void: language_requested.emit())
@@ -336,6 +360,8 @@ func _make_card(entry: Dictionary, index: int) -> Button:
 
 	var b := Button.new()
 	b.custom_minimum_size = CARD
+	# GridContainer 把剩余宽度均分到各列，降列后也与其它菜单内容齐边。
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	b.focus_mode = Control.FOCUS_ALL if unlocked else Control.FOCUS_NONE
 	b.disabled = not unlocked
 	b.add_theme_stylebox_override("normal", _sb(CARD_BG, EDGE, 1))

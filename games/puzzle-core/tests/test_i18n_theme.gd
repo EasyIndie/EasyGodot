@@ -62,6 +62,11 @@ func _run() -> void:
 	for id in VisualTheme.IDS:
 		scene._apply_visual_theme(id)
 		check(scene.game.theme_id == id, "主题应用")
+		var recipe: Dictionary = VisualTheme.palette(id)
+		check(scene.get_node("WorldEnvironment").environment.background_color == recipe["bg_mid"], "低画质背景同步主题")
+		check(is_equal_approx(scene.light.light_energy, recipe["energy"]), "主题光照同步")
+		check(scene.game._block_mat.get_shader_parameter("surface_roughness") == recipe["block_roughness"], "切换主题同步材质质感")
+		check(scene.left_panel.get_theme_stylebox("panel").bg_color == recipe["panel"], "HUD同步主题")
 		check(scene.game.state.world_cells() == state and scene.game.move_count == count, "换主题保留当前方块和步数")
 	check(scene.level_label.text.begins_with("Level"), "英文HUD")
 	scene._touch_active = true
@@ -69,6 +74,12 @@ func _run() -> void:
 	scene._open_level_select()
 	await process_frame
 	check(scene.level_select._title.text == "Choose a level", "英文选关")
+	scene.level_select._theme_choices["abyss"].pressed.emit()
+	await process_frame
+	check(not scene.level_select.is_open() and scene.progress.visual_theme() == "abyss", "主题卡片直接选择并返回游戏")
+	check(scene.game.state.world_cells() == state, "主题卡片切换保留棋盘状态")
+	scene._open_level_select()
+	await process_frame
 	check(scene.touch_controls._action_buttons[0].text == "Retry", "英文触屏按钮")
 	# en -> zh -> system。跟随英文系统，继续保持当前谜题。
 	scene._on_language_requested()
